@@ -1,0 +1,36 @@
+package com.tv.wnotes.ui.editor.engine.logic
+
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import com.tv.wnotes.ui.editor.engine.state.WSelectionPoint
+
+/**
+ * Interface for components that can translate screen coordinates to document positions.
+ * Usually implemented by the Rendering Pipeline.
+ */
+interface WLayoutProvider {
+    /**
+     * Finds the selection point (block and character offset) for a given screen offset.
+     */
+    fun getSelectionPointForOffset(offset: Offset): WSelectionPoint?
+
+    /**
+     * Checks if a screen offset is within the current visual selection bounds.
+     */
+    fun isOffsetInsideSelection(offset: Offset): Boolean
+
+    /**
+     * Returns the physical rect of the insertion cursor for a given point.
+     */
+    fun getInsertionBeamForPoint(point: WSelectionPoint): Rect?
+
+    /**
+     * Returns the bounding boxes of the current selection.
+     */
+    fun getSelectionBounds(): List<Rect>
+
+    /**
+     * Performs a hit-test to find the document position at a given screen offset.
+     */
+    fun hitTest(offset: Offset): WHitResult?
+}

@@ -1,0 +1,12 @@
+- [x] Rename "Link Paths" to "Stapled"
+    - [x] Update `LinkPathViewModel.kt` and `LinkPathRepository.kt`
+    - [x] Update `MainActivity.kt` (Drawer)
+    - [x] Update `HomeScreen.kt` (Menus)
+    - [x] Update `NoteEditorScreen.kt` (Badges/Menu)
+    - [x] Update `LinkPathsScreen.kt` (Screen titles)
+    - [x] Update `NoteAssignmentSheets.kt` (Rename component and text)
+    - [x] Update emojis in `NoteCard.kt`, `SquareNoteCard.kt`
+- [/] Update App Icon
+    - [ ] Replace launcher icons with the new image (Waiting for image file)
+    - [x] Update adaptive icon background
+- [ ] Verify build and functionality
