@@ -588,6 +588,19 @@ fun NoteWorkspaceScreen(
                                                         }
                                                     )
                                                 }
+
+                                                if (quickNoteTargetId == note.id && showQuickNoteInput) {
+                                                    QuickNoteInput(
+                                                        onDismiss = { text ->
+                                                            if (text.isNotBlank()) {
+                                                                noteViewModel.appendQuickNote(note.id, text)
+                                                            }
+                                                            showQuickNoteInput = false
+                                                            quickNoteTargetId = null
+                                                            noteViewModel.clearSelection()
+                                                        }
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -711,19 +724,6 @@ fun NoteWorkspaceScreen(
                 }
             )
 
-            if (showQuickNoteInput && quickNoteTargetId != null) {
-                QuickNoteInput(
-                    onDismiss = { text ->
-                        val targetId = quickNoteTargetId
-                        if (targetId != null && text.isNotBlank()) {
-                            noteViewModel.appendQuickNote(targetId, text)
-                        }
-                        showQuickNoteInput = false
-                        quickNoteTargetId = null
-                        noteViewModel.clearSelection()
-                    }
-                )
-            }
         }
     }
 

@@ -521,7 +521,8 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                 // Handle legacy/new notes that don't have tabs yet
                 val currentNote = database.noteDao().getNoteById(noteId)
                 val existingContent = currentNote?.content ?: ""
-                val separator = if (existingContent.isBlank()) "" else "\n\n"
+                // Use a single newline to ensure it appears on the "next line"
+                val separator = if (existingContent.isBlank()) "" else if (existingContent.endsWith("\n")) "" else "\n"
                 val newContent = existingContent + separator + text.trim()
                 
                 val newTab = NoteTab(
@@ -532,7 +533,8 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 // Append to the last tab
                 val lastTab = tabs.last()
-                val separator = if (lastTab.content.isBlank()) "" else "\n\n"
+                // Use a single newline to ensure it appears on the "next line"
+                val separator = if (lastTab.content.isBlank()) "" else if (lastTab.content.endsWith("\n")) "" else "\n"
                 val updatedContent = lastTab.content + separator + text.trim()
                 repository.updateTab(lastTab.copy(
                     content = updatedContent,

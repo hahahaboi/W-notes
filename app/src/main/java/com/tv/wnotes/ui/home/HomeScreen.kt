@@ -460,6 +460,19 @@ fun HomeScreen(
                                                         }
                                                     )
                                                 }
+
+                                                if (quickNoteTargetId == note.id && showQuickNoteInput) {
+                                                    QuickNoteInput(
+                                                        onDismiss = { text ->
+                                                            if (text.isNotBlank()) {
+                                                                viewModel.appendQuickNote(note.id, text)
+                                                            }
+                                                            showQuickNoteInput = false
+                                                            quickNoteTargetId = null
+                                                            viewModel.clearSelection()
+                                                        }
+                                                    )
+                                                }
                                             }
                                         }
                                         is HomeItem.GroupItem -> {
@@ -727,21 +740,7 @@ fun HomeScreen(
             )
         }
 
-        if (showQuickNoteInput && quickNoteTargetId != null) {
-            QuickNoteInput(
-                onDismiss = { text ->
-                    val targetId = quickNoteTargetId
-                    if (targetId != null && text.isNotBlank()) {
-                        viewModel.appendQuickNote(targetId, text)
-                    }
-                    showQuickNoteInput = false
-                    quickNoteTargetId = null
-                    viewModel.clearSelection()
-                }
-            )
-        }
-
-        // Pop-out Animation Overlay
+        // Note Pop-out Animation Overlay
         animatingNoteData?.let { data ->
             NotePopOutOverlay(
                 data = data,
