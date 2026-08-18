@@ -1,23 +1,31 @@
 package com.tv.wnotes.ui.editor
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.ContentCut
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.toSize
+import kotlin.math.roundToInt
 import com.tv.wnotes.ui.editor.engine.renderer.WDragPreviewRenderer
 import com.tv.wnotes.ui.editor.engine.renderer.WInsertionCaretRenderer
 import com.tv.wnotes.ui.editor.engine.renderer.WDragAnimationController
@@ -50,20 +58,16 @@ fun WEditorOverlay(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Multi-Selection Toolbar (Stage XX)
+        // Multi-Selection Toolbar (Redesigned)
         if (snapshot.selection.isActive && !isDragging) {
-            MultiSelectionToolbar(
-                snapshot = snapshot,
-                onCommand = onCommand,
-                onAddModeToggle = {
-                    val nextMode = if (snapshot.selection.interactionMode == WSelectionInteraction.NORMAL)
-                        WSelectionInteraction.ADD_RANGE
-                    else
-                        WSelectionInteraction.NORMAL
-                    onCommand(WEditorCommand.SetSelectionInteraction(nextMode))
-                },
-                modifier = Modifier.align(Alignment.BottomCenter).imePadding().padding(bottom = 16.dp)
-            )
+            Box(modifier = Modifier.fillMaxSize()) {
+                MultiSelectionToolbar(
+                    snapshot = snapshot,
+                    layoutState = layoutState,
+                    onCommand = onCommand,
+                    modifier = Modifier.imePadding()
+                )
+            }
         }
 
         // Annotation Input Popup
@@ -132,145 +136,253 @@ fun WEditorOverlay(
                 )
             }
         }
+
+        // Quick Marker Jump
+        if (snapshot.isQuickJumpOpen) {
+            WMarkerQuickJump(
+                snapshot = snapshot,
+                onCommand = onCommand
+            )
+        }
     }
 }
 
 @Composable
 private fun MultiSelectionToolbar(
     snapshot: WEditorSnapshot,
+    layoutState: com.tv.wnotes.ui.editor.engine.logic.WLayoutProvider,
     onCommand: (WEditorCommand) -> Unit,
-    onAddModeToggle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val state = snapshot.selection
-    Surface(
-        modifier = modifier,
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant, // Simplified from surfaceColorAtElevation
-        shadowElevation = 8.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val isAddMode = state.interactionMode == WSelectionInteraction.ADD_RANGE
-            
-            TextButton(
-                onClick = onAddModeToggle,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                modifier = Modifier.heightIn(min = 32.dp)
-            ) {
-                Text(
-                    text = if (isAddMode) "Done" else "+ Selection",
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.labelLarge
-                )
+    var isExpanded by remember { mutableStateOf(false) }
+    var rawOffset by remember { mutableStateOf(Offset.Zero) }
+    var hasInitializedPosition by remember { mutableStateOf(false) }
+    var parentSize by remember { mutableStateOf(Size.Zero) }
+    var toolbarSize by remember { mutableStateOf(Size.Zero) }
+
+    // Colors
+    val toolbarBg = Color(0xFF121212)
+    val contentColor = Color(0xFFD1D1D1)
+    val dividerColor = Color(0xFF333333)
+
+    val density = androidx.compose.ui.platform.LocalDensity.current
+
+    // Initial position logic
+    LaunchedEffect(state.isActive, snapshot.document.revision) {
+        if (state.isActive && !hasInitializedPosition) {
+            val bounds = layoutState.getSelectionBounds()
+            if (bounds.isNotEmpty()) {
+                val topBound = bounds.minByOrNull { it.top }?.top ?: 0f
+                val centerX = bounds.map { it.center.x }.average().toFloat()
+                
+                // Position above the selection
+                with(density) {
+                    rawOffset = Offset(centerX - 100.dp.toPx(), topBound - 60.dp.toPx())
+                }
+                hasInitializedPosition = true
             }
+        }
+    }
 
-            if (!isAddMode) {
-                VerticalDivider(modifier = Modifier.height(16.dp))
-                
-                IconButton(
-                    onClick = { onCommand(WEditorCommand.Cut) },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(Icons.Default.ContentCut, contentDescription = "Cut", modifier = Modifier.size(18.dp))
-                }
-                IconButton(
-                    onClick = { onCommand(WEditorCommand.Copy) },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(18.dp))
-                }
-                IconButton(
-                    onClick = { onCommand(WEditorCommand.Paste) },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(Icons.Default.ContentPaste, contentDescription = "Paste", modifier = Modifier.size(18.dp))
-                }
-                IconButton(
-                    onClick = { onCommand(WEditorCommand.SelectAll) },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(Icons.Default.SelectAll, contentDescription = "Select All", modifier = Modifier.size(18.dp))
-                }
-
-                val canAnnotate = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.isSingleBlock(state)
-                TextButton(
-                    onClick = { 
-                        val range = state.ranges.firstOrNull()
-                        if (range != null) {
-                            val normalized = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(range, snapshot.document.blocks)
-                            val anchorText = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.getSelectedText(
-                                state.copy(ranges = listOf(normalized)),
-                                snapshot.document.blocks
-                            )
-                            onCommand(WEditorCommand.StartCreatingAnnotation(normalized, anchorText))
-                        }
-                    },
-                    enabled = canAnnotate,
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                    modifier = Modifier.heightIn(min = 32.dp)
-                ) {
-                    Text("Context", style = MaterialTheme.typography.labelLarge, color = if (canAnnotate) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
-                }
-
-                VerticalDivider(modifier = Modifier.height(16.dp))
-                
-                TextButton(
-                    onClick = { onCommand(WEditorCommand.MakeTabFromSelection) },
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                    modifier = Modifier.heightIn(min = 32.dp)
-                ) {
-                    Text("Make Tab", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                }
-
-                VerticalDivider(modifier = Modifier.height(16.dp))
-                
-                IconButton(
-                    onClick = { onCommand(WEditorCommand.ApplySpan(SpanType.Bold)) },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Text("B", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                }
-                IconButton(
-                    onClick = { onCommand(WEditorCommand.ApplySpan(SpanType.Italic)) },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Text("I", style = MaterialTheme.typography.bodyMedium.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic))
-                }
-                IconButton(
-                    onClick = { onCommand(WEditorCommand.ApplySpan(SpanType.Highlight)) },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Text("H", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
-                }
-                
-                VerticalDivider(modifier = Modifier.height(16.dp))
-                
-                IconButton(
-                    onClick = { 
-                        // We need a specific Delete Selection command
-                        onCommand(WEditorCommand.DeleteBackward) // This usually handles selection if active
-                    },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Delete, 
-                        contentDescription = "Delete",
-                        modifier = Modifier.size(18.dp)
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onGloballyPositioned { parentSize = it.size.toSize() }
+    ) {
+        Column(
+            modifier = Modifier
+                .offset {
+                    if (!hasInitializedPosition && parentSize.width > 0) {
+                        rawOffset = Offset(
+                            (parentSize.width - toolbarSize.width) / 2,
+                            parentSize.height - toolbarSize.height - 100.dp.toPx()
+                        )
+                        hasInitializedPosition = true
+                    }
+                    IntOffset(
+                        rawOffset.x.roundToInt().coerceIn(0, (parentSize.width - toolbarSize.width).toInt().coerceAtLeast(0)),
+                        rawOffset.y.roundToInt().coerceIn(0, (parentSize.height - toolbarSize.height).toInt().coerceAtLeast(0))
                     )
                 }
+                .onGloballyPositioned { toolbarSize = it.size.toSize() }
+                .pointerInput(Unit) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        rawOffset += dragAmount
+                    }
+                },
+            horizontalAlignment = Alignment.End
+        ) {
+            // Main Toolbar
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = toolbarBg,
+                shadowElevation = 8.dp,
+                border = androidx.compose.foundation.BorderStroke(0.5.dp, Color.White.copy(alpha = 0.1f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    ToolbarAction(Icons.Default.ContentCut, "Cut", contentColor) { onCommand(WEditorCommand.Cut) }
+                    ToolbarSeparator(dividerColor)
+                    ToolbarAction(Icons.Default.ContentCopy, "Copy", contentColor) { onCommand(WEditorCommand.Copy) }
+                    ToolbarSeparator(dividerColor)
+                    ToolbarAction(Icons.Default.ContentPaste, "Paste", contentColor) { onCommand(WEditorCommand.Paste) }
+                    ToolbarSeparator(dividerColor)
+                    ToolbarTextAction("I", contentColor, italic = true) { onCommand(WEditorCommand.ApplySpan(SpanType.Italic)) }
+                    ToolbarSeparator(dividerColor)
+                    ToolbarTextAction("B", contentColor, bold = true) { onCommand(WEditorCommand.ApplySpan(SpanType.Bold)) }
+                    ToolbarSeparator(dividerColor)
+                    IconButton(
+                        onClick = { isExpanded = !isExpanded },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = "More",
+                            tint = contentColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
             }
 
-            if (state.ranges.size > 1) {
-                VerticalDivider(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "${state.ranges.size} Selected",
-                    style = MaterialTheme.typography.labelSmall
-                )
+            // Dropdown Menu (L-Shape)
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Surface(
+                    modifier = Modifier.width(180.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = toolbarBg,
+                    shadowElevation = 12.dp,
+                    border = androidx.compose.foundation.BorderStroke(0.5.dp, Color.White.copy(alpha = 0.1f))
+                ) {
+                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                        DropdownItem(
+                            icon = Icons.Default.Add,
+                            label = if (state.interactionMode == WSelectionInteraction.ADD_RANGE) "Done" else "Add Selection",
+                            color = contentColor
+                        ) {
+                            val nextMode = if (state.interactionMode == WSelectionInteraction.NORMAL)
+                                WSelectionInteraction.ADD_RANGE
+                            else
+                                WSelectionInteraction.NORMAL
+                            onCommand(WEditorCommand.SetSelectionInteraction(nextMode))
+                            isExpanded = false
+                        }
+                        DropdownItem(
+                            icon = Icons.Default.OpenInNew,
+                            label = "Move to New Tab",
+                            color = contentColor
+                        ) {
+                            onCommand(WEditorCommand.MakeTabFromSelection)
+                            isExpanded = false
+                        }
+                        val canAnnotate = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.isSingleBlock(state)
+                        DropdownItem(
+                            icon = Icons.Default.Comment,
+                            label = "Add Context",
+                            color = contentColor,
+                            enabled = canAnnotate
+                        ) {
+                            val range = state.ranges.firstOrNull()
+                            if (range != null) {
+                                val normalized = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(range, snapshot.document.blocks)
+                                val anchorText = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.getSelectedText(
+                                    state.copy(ranges = listOf(normalized)),
+                                    snapshot.document.blocks
+                                )
+                                onCommand(WEditorCommand.StartCreatingAnnotation(normalized, anchorText))
+                            }
+                            isExpanded = false
+                        }
+                    }
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun ToolbarAction(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(18.dp))
+    }
+}
+
+@Composable
+private fun ToolbarTextAction(
+    text: String,
+    tint: Color,
+    bold: Boolean = false,
+    italic: Boolean = false,
+    onClick: () -> Unit
+) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.size(36.dp),
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        Text(
+            text = text,
+            color = tint,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+            fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
+            fontSize = 16.sp
+        )
+    }
+}
+
+@Composable
+private fun ToolbarSeparator(color: Color) {
+    Box(
+        modifier = Modifier
+            .height(16.dp)
+            .width(1.dp)
+            .background(color)
+    )
+}
+
+@Composable
+private fun DropdownItem(
+    icon: ImageVector,
+    label: String,
+    color: Color,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val alpha = if (enabled) 1f else 0.4f
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = color.copy(alpha = alpha),
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = color.copy(alpha = alpha),
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }

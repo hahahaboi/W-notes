@@ -28,6 +28,7 @@ class WEditorHost(
 ) {
     val snapshot: State<WEditorSnapshot> = engineState.snapshot
     private var pendingAnnotationJob: kotlinx.coroutines.Job? = null
+    private var navigationHighlightJob: kotlinx.coroutines.Job? = null
 
     fun updateLayoutProvider(layoutProvider: WLayoutProvider) {
         gestureCoordinator.updateLayoutProvider(layoutProvider)
@@ -162,6 +163,92 @@ class WEditorHost(
                 engineState.startCreatingAnnotation(command.range, command.anchorText)
             }
             is WEditorCommand.CancelCreatingAnnotation -> engineState.cancelCreatingAnnotation()
+            is WEditorCommand.ToggleMarkerSidebar -> engineState.toggleMarkerSidebar()
+            is WEditorCommand.CreateMarker -> {
+                val result = WMutationEngine.createMarker(engineState.snapshot.value, command.label, command.range, command.anchorText)
+                if (result is WMutationResult.Success) {
+                    inputController.onOperation(WOperation.GeneralMutation(engineState.snapshot.value, result.snapshot, result.mutationType))
+                }
+            }
+            is WEditorCommand.UpdateMarkerLabel -> {
+                val result = WMutationEngine.updateMarkerLabel(engineState.snapshot.value, command.id, command.newLabel)
+                if (result is WMutationResult.Success) {
+                    inputController.onOperation(WOperation.GeneralMutation(engineState.snapshot.value, result.snapshot, result.mutationType))
+                }
+            }
+            is WEditorCommand.UpdateMarkerType -> {
+                val result = WMutationEngine.updateMarkerType(engineState.snapshot.value, command.id, command.newType)
+                if (result is WMutationResult.Success) {
+                    inputController.onOperation(WOperation.GeneralMutation(engineState.snapshot.value, result.snapshot, result.mutationType))
+                }
+            }
+            is WEditorCommand.DeleteMarker -> {
+                val result = WMutationEngine.deleteMarker(engineState.snapshot.value, command.id)
+                if (result is WMutationResult.Success) {
+                    inputController.onOperation(WOperation.GeneralMutation(engineState.snapshot.value, result.snapshot, result.mutationType))
+                }
+            }
+            is WEditorCommand.NavigateToMarker -> {
+                val marker = snapshot.value.markers.find { it.id == command.markerId }
+                if (marker != null) {
+                    val blockExists = snapshot.value.document.blocks.any { it.id == marker.startBlockId }
+                    if (blockExists) {
+                        engineState.setActiveMarker(marker.id)
+                        val point = WSelectionPoint(marker.startBlockId, marker.startOffset)
+                        engineState.moveCursor(point, com.tv.wnotes.ui.editor.engine.logic.CursorAffinity.AFTER)
+                        
+                        // Set temporary highlight
+                        val range = WSelectionRange(
+                            anchor = WSelectionPoint(marker.startBlockId, marker.startOffset),
+                            focus = WSelectionPoint(marker.endBlockId, marker.endOffset)
+                        )
+                        engineState.setNavigationHighlight(range)
+                        
+                        // Clear highlight after delay
+                        navigationHighlightJob?.cancel()
+                        navigationHighlightJob = scope.launch {
+                            kotlinx.coroutines.delay(2000)
+                            engineState.setNavigationHighlight(null)
+                        }
+                    } else {
+                        // Optional: show feedback that marker is invalid
+                        // For Phase 3, we just delete it if it's found to be invalid during navigation attempt
+                        dispatchCommand(WEditorCommand.DeleteMarker(marker.id))
+                    }
+                }
+            }
+            is WEditorCommand.NavigateToNextMarker -> {
+                val currentMarkers = WMarkerManager.sortMarkers(snapshot.value.markers, snapshot.value.document.blocks)
+                if (currentMarkers.isEmpty()) return
+                
+                val cursor = snapshot.value.cursor.position
+                val blocks = snapshot.value.document.blocks
+                
+                // Find the first marker starting after the cursor
+                val nextMarker = currentMarkers.find { marker ->
+                    val markerStart = WSelectionPoint(marker.startBlockId, marker.startOffset)
+                    comparePoints(markerStart, cursor, blocks) > 0
+                } ?: currentMarkers.first() // Wrap around or stay at end? Phase 5: find first after caret
+                
+                nextMarker.let { dispatchCommand(WEditorCommand.NavigateToMarker(it.id)) }
+            }
+            is WEditorCommand.NavigateToPreviousMarker -> {
+                val currentMarkers = WMarkerManager.sortMarkers(snapshot.value.markers, snapshot.value.document.blocks)
+                if (currentMarkers.isEmpty()) return
+
+                val cursor = snapshot.value.cursor.position
+                val blocks = snapshot.value.document.blocks
+
+                // Find the last marker starting before the cursor
+                val prevMarker = currentMarkers.findLast { marker ->
+                    val markerStart = WSelectionPoint(marker.startBlockId, marker.startOffset)
+                    comparePoints(markerStart, cursor, blocks) < 0
+                } ?: currentMarkers.last()
+                
+                prevMarker.let { dispatchCommand(WEditorCommand.NavigateToMarker(it.id)) }
+            }
+            is WEditorCommand.OpenQuickJump -> engineState.setQuickJumpOpen(true)
+            is WEditorCommand.CloseQuickJump -> engineState.setQuickJumpOpen(false)
             is WEditorCommand.MakeTabFromSelection -> { /* Handled in remember block via lambda */ }
             else -> println("WEditor Command Received: $command")
         }
@@ -172,6 +259,7 @@ class WEditorHost(
 fun rememberWEditorHost(
     initialDocument: WDocument,
     initialAnnotations: List<com.tv.wnotes.data.local.entity.ContextAnnotation> = emptyList(),
+    initialMarkers: List<com.tv.wnotes.data.local.entity.TextMarker> = emptyList(),
     initialSnapshot: WEditorSnapshot? = null,
     layoutProvider: WLayoutProvider = EmptyLayoutProvider,
     onMakeTab: (String) -> Unit = {},
@@ -185,7 +273,7 @@ fun rememberWEditorHost(
         val engineState = if (initialSnapshot != null) {
             com.tv.wnotes.ui.editor.engine.state.WEditorState(initialSnapshot)
         } else {
-            com.tv.wnotes.ui.editor.engine.state.WEditorState(initialDocument, initialAnnotations, initialCursorAtEnd)
+            com.tv.wnotes.ui.editor.engine.state.WEditorState(initialDocument, initialAnnotations, initialMarkers, initialCursorAtEnd)
         }
         val uiState = WEditorState(engineState.snapshot)
         val history = WHistoryManager()
@@ -255,6 +343,16 @@ fun rememberWEditorHost(
     return host
 }
 
+/**
+ * Helper to compare two document positions.
+ */
+private fun comparePoints(p1: WSelectionPoint, p2: WSelectionPoint, blocks: List<com.tv.wnotes.ui.editor.engine.model.WBlock>): Int {
+    if (p1.blockId == p2.blockId) return p1.offset - p2.offset
+    val idx1 = blocks.indexOfFirst { it.id == p1.blockId }
+    val idx2 = blocks.indexOfFirst { it.id == p2.blockId }
+    return idx1 - idx2
+}
+
 private object EmptyLayoutProvider : WLayoutProvider {
     override fun getSelectionPointForOffset(offset: Offset): WSelectionPoint? = null
     override fun isOffsetInsideSelection(offset: Offset): Boolean = false
@@ -268,4 +366,5 @@ private object EmptyLayoutProvider : WLayoutProvider {
     override val currentSelection: com.tv.wnotes.ui.editor.engine.state.WSelectionState? = null
     override val currentBlocks: List<com.tv.wnotes.ui.editor.engine.model.WBlock> = emptyList()
     override val currentAnnotations: List<com.tv.wnotes.data.local.entity.ContextAnnotation> = emptyList()
+    override fun getAnnotationsForBlock(blockId: String): List<com.tv.wnotes.data.local.entity.ContextAnnotation> = emptyList()
 }

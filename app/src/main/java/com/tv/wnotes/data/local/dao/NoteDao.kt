@@ -36,6 +36,12 @@ interface NoteDao {
     @Update
     suspend fun updateNote(note: Note)
 
+    @Query("UPDATE notes SET title = :title, folderId = :folderId, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateTitleAndFolder(id: Long, title: String, folderId: Long?, updatedAt: Long)
+
+    @Query("UPDATE notes SET content = :content, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateContent(id: Long, content: String, updatedAt: Long)
+
     @Delete
     suspend fun deleteNote(note: Note)
 

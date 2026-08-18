@@ -4,6 +4,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
 import com.tv.wnotes.data.local.entity.ContextAnnotation
+import com.tv.wnotes.data.local.entity.TextMarker
 import com.tv.wnotes.ui.editor.engine.model.*
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
@@ -15,6 +16,8 @@ import kotlinx.collections.immutable.toImmutableList
 data class WEditorSnapshot(
     val document: WDocument,
     val annotations: ImmutableList<ContextAnnotation> = persistentListOf(),
+    val markers: ImmutableList<TextMarker> = persistentListOf(),
+    val isMarkerSidebarOpen: Boolean = false,
     val selection: WSelectionState,
     val cursor: WCursorState,
     val drag: WDragState,
@@ -27,8 +30,15 @@ data class WEditorSnapshot(
     val activeAnnotationId: String? = null,
     val isCreatingAnnotation: Boolean = false,
     val pendingAnnotationRange: WSelectionRange? = null,
-    val pendingAnnotationAnchorText: String = ""
-)
+    val pendingAnnotationAnchorText: String = "",
+    val navigationHighlightRange: WSelectionRange? = null,
+    val activeMarkerId: String? = null,
+    val isQuickJumpOpen: Boolean = false
+) {
+    val annotationIndex: Map<String, List<ContextAnnotation>> by lazy {
+        annotations.groupBy { it.blockId }
+    }
+}
 
 /**
  * The single source of truth for the WEditor.
@@ -39,11 +49,13 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
     constructor(
         initialDocument: WDocument, 
         initialAnnotations: List<ContextAnnotation> = emptyList(),
+        initialMarkers: List<TextMarker> = emptyList(),
         cursorAtEnd: Boolean = false
     ) : this(
         WEditorSnapshot(
             document = initialDocument,
             annotations = initialAnnotations.toImmutableList(),
+            markers = initialMarkers.toImmutableList(),
             selection = WSelectionState(),
             cursor = WCursorState(position = if (cursorAtEnd) {
                 val lastBlock = initialDocument.blocks.lastOrNull()
@@ -303,6 +315,30 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
             pendingAnnotationRange = null,
             pendingAnnotationAnchorText = ""
         )
+    }
+
+    // --- Text Marker APIs ---
+
+    fun toggleMarkerSidebar() {
+        val current = _snapshot.value
+        _snapshot.value = current.copy(isMarkerSidebarOpen = !current.isMarkerSidebarOpen)
+    }
+
+    fun setNavigationHighlight(range: WSelectionRange?) {
+        val current = _snapshot.value
+        _snapshot.value = current.copy(navigationHighlightRange = range)
+    }
+
+    fun setActiveMarker(id: String?) {
+        val current = _snapshot.value
+        if (current.activeMarkerId == id) return
+        _snapshot.value = current.copy(activeMarkerId = id)
+    }
+
+    fun setQuickJumpOpen(isOpen: Boolean) {
+        val current = _snapshot.value
+        if (current.isQuickJumpOpen == isOpen) return
+        _snapshot.value = current.copy(isQuickJumpOpen = isOpen)
     }
 
     // Note: Other high-level methods like insertText() will be refined 

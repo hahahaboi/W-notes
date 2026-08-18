@@ -94,7 +94,7 @@ class WGestureCoordinator(
         // Check for annotations on single tap
         if (tapCount == 1 && !isShiftPressed && !isAddMode) {
             val annotation = WAnnotationManager.getAnnotationAtPoint(
-                layoutProvider.currentAnnotations,
+                layoutProvider.getAnnotationsForBlock(hit.blockId),
                 hit.blockId,
                 hit.characterIndex
             )

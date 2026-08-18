@@ -56,7 +56,6 @@ import com.tv.wnotes.viewmodel.NoteViewModel
 import com.tv.wnotes.viewmodel.SelectionState
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
@@ -153,6 +152,8 @@ fun HomeScreen(
     var noteToLock by remember { mutableStateOf<Note?>(null) }
     var showPinSetupForNote by remember { mutableStateOf(false) }
     var showPinEntryForNote by remember { mutableStateOf(false) }
+    var showQuickNoteInput by remember { mutableStateOf(false) }
+    var quickNoteTargetId by remember { mutableStateOf<Long?>(null) }
 
     val scope = rememberCoroutineScope()
     val gridState = rememberLazyGridState()
@@ -172,6 +173,8 @@ fun HomeScreen(
     LaunchedEffect(selectionState) {
         if (selectionState !is SelectionState.SingleNote) {
             showInfoPanel = false
+            showQuickNoteInput = false
+            quickNoteTargetId = null
         }
         if (selectionState.totalCount > 1) contextMenuNoteId = null
     }
@@ -447,6 +450,16 @@ fun HomeScreen(
                                                         }
                                                     )
                                                 }
+
+                                                if (contextMenuNoteId == note.id) {
+                                                    ContextualQuickNoteButton(
+                                                        onQuickNote = {
+                                                            quickNoteTargetId = note.id
+                                                            showQuickNoteInput = true
+                                                            contextMenuNoteId = null
+                                                        }
+                                                    )
+                                                }
                                             }
                                         }
                                         is HomeItem.GroupItem -> {
@@ -710,6 +723,19 @@ fun HomeScreen(
                             }
                         }
                     }
+                }
+            )
+        }
+
+        if (showQuickNoteInput && quickNoteTargetId != null) {
+            QuickNoteInput(
+                onDismiss = { text ->
+                    if (text.isNotBlank()) {
+                        viewModel.appendQuickNote(quickNoteTargetId!!, text)
+                    }
+                    showQuickNoteInput = false
+                    quickNoteTargetId = null
+                    viewModel.clearSelection()
                 }
             )
         }

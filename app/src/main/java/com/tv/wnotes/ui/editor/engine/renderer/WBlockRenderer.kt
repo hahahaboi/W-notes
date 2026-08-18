@@ -102,12 +102,11 @@ private fun TextBlockRenderer(
     
     var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
     
-    val annotationGeometries by remember(snapshot.annotations, layoutResult) {
+    val annotationGeometries by remember(snapshot.annotationIndex[block.id], layoutResult) {
         derivedStateOf {
             layoutResult?.let { layout ->
-                snapshot.annotations
-                    .filter { it.blockId == block.id }
-                    .mapNotNull { annotation ->
+                snapshot.annotationIndex[block.id]
+                    ?.mapNotNull { annotation ->
                         WAnnotationGeometryCalculator.calculateGeometry(annotation, layout, Offset.Zero)
                     }
             } ?: emptyList()
@@ -153,12 +152,11 @@ private fun ChecklistBlockRenderer(
         }
         var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
         
-        val annotationGeometries by remember(snapshot.annotations, layoutResult) {
+        val annotationGeometries by remember(snapshot.annotationIndex[block.id], layoutResult) {
             derivedStateOf {
                 layoutResult?.let { layout ->
-                    snapshot.annotations
-                        .filter { it.blockId == block.id }
-                        .mapNotNull { annotation ->
+                    snapshot.annotationIndex[block.id]
+                        ?.mapNotNull { annotation ->
                             WAnnotationGeometryCalculator.calculateGeometry(annotation, layout, Offset.Zero)
                         }
                 } ?: emptyList()

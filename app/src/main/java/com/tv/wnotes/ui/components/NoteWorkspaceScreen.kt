@@ -105,6 +105,8 @@ fun NoteWorkspaceScreen(
     var searchQuery by rememberSaveable(sectionKey) { mutableStateOf("") }
     var contextMenuNoteId by remember { mutableStateOf<Long?>(null) }
     var contextMenuGroupId by remember { mutableStateOf<Long?>(null) }
+    var showQuickNoteInput by remember { mutableStateOf(false) }
+    var quickNoteTargetId by remember { mutableStateOf<Long?>(null) }
     val gridState = rememberSaveable(sectionKey, saver = LazyGridState.Saver) { LazyGridState() }
     
     var openingFolderId by remember { mutableStateOf<Long?>(null) }
@@ -112,6 +114,8 @@ fun NoteWorkspaceScreen(
     LaunchedEffect(selectionState) {
         if (selectionState !is SelectionState.SingleNote) {
             showInfoPanel = false
+            showQuickNoteInput = false
+            quickNoteTargetId = null
         }
         if (selectionState.totalCount > 1) {
             contextMenuNoteId = null
@@ -442,6 +446,16 @@ fun NoteWorkspaceScreen(
                                                 DropdownMenuItem(text = { Text("Share") }, onClick = { shareNotes(context, listOf(note)); contextMenuNoteId = null; noteViewModel.clearSelection() })
                                                 DropdownMenuItem(text = { Text(if (note.isDeleted) "Delete Permanently" else "Move to Trash") }, onClick = { if (note.isDeleted) noteViewModel.deletePermanently(note) else noteViewModel.moveToTrash(note); contextMenuNoteId = null; noteViewModel.clearSelection() })
                                             }
+
+                                            if (contextMenuNoteId == note.id) {
+                                                ContextualQuickNoteButton(
+                                                    onQuickNote = {
+                                                        quickNoteTargetId = note.id
+                                                        showQuickNoteInput = true
+                                                        contextMenuNoteId = null
+                                                    }
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -564,6 +578,16 @@ fun NoteWorkspaceScreen(
                                                     onSwipeRight = { noteViewModel.toggleStar(note) },
                                                     onSwipeLeft = { if (isTrashSection) noteViewModel.deletePermanently(note) else noteViewModel.moveToTrash(note) }
                                                 )
+
+                                                if (contextMenuNoteId == note.id) {
+                                                    ContextualQuickNoteButton(
+                                                        onQuickNote = {
+                                                            quickNoteTargetId = note.id
+                                                            showQuickNoteInput = true
+                                                            contextMenuNoteId = null
+                                                        }
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -649,7 +673,7 @@ fun NoteWorkspaceScreen(
                 }) else null,
                 showInfoPanel = showInfoPanel,
                 onCloseInfo = { showInfoPanel = false },
-                infoContent = {
+                infoContent = @Composable {
                     if (selectionState is SelectionState.SingleNote) {
                         val singleNoteState = selectionState as SelectionState.SingleNote
                         val noteId = singleNoteState.noteId
@@ -686,6 +710,19 @@ fun NoteWorkspaceScreen(
                     }
                 }
             )
+
+            if (showQuickNoteInput && quickNoteTargetId != null) {
+                QuickNoteInput(
+                    onDismiss = { text ->
+                        if (text.isNotBlank()) {
+                            noteViewModel.appendQuickNote(quickNoteTargetId!!, text)
+                        }
+                        showQuickNoteInput = false
+                        quickNoteTargetId = null
+                        noteViewModel.clearSelection()
+                    }
+                )
+            }
         }
     }
 

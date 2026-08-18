@@ -7,6 +7,7 @@ import com.tv.wnotes.data.local.WNotesDatabase
 import com.tv.wnotes.data.local.entity.Note
 import com.tv.wnotes.data.local.entity.NoteTab
 import com.tv.wnotes.data.local.entity.ContextAnnotation
+import com.tv.wnotes.data.local.entity.TextMarker
 import com.tv.wnotes.data.local.model.NotePathInfo
 import com.tv.wnotes.data.pref.PreferenceManager
 import com.tv.wnotes.data.repository.NoteGroupRepository
@@ -27,7 +28,7 @@ enum class UncategorizedFilter(val label: String) {
 @OptIn(kotlinx.coroutines.FlowPreview::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class NoteViewModel(application: Application) : AndroidViewModel(application) {
     private val database = WNotesDatabase.getDatabase(application)
-    private val repository = NoteRepository(database.noteDao(), database.noteTabDao(), database.annotationDao())
+    private val repository = NoteRepository(database.noteDao(), database.noteTabDao(), database.annotationDao(), database.markerDao())
     private val noteGroupRepository = NoteGroupRepository(database.noteGroupDao())
     private val linkPathDao = database.linkPathDao()
     private val preferenceManager = PreferenceManager(application)
@@ -291,12 +292,28 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
             content = content,
             folderId = folderId
         )
-        return repository.insert(note)
+        val noteId = repository.insert(note)
+        
+        // Create initial tab
+        val initialTab = NoteTab(
+            noteId = noteId,
+            content = content,
+            orderIndex = 0
+        )
+        repository.insertTab(initialTab)
+        
+        return noteId
     }
 
     fun updateNote(note: Note) {
         viewModelScope.launch {
             repository.update(note.copy(updatedAt = System.currentTimeMillis()))
+        }
+    }
+
+    fun updateNoteTitleAndFolder(noteId: Long, title: String, folderId: Long?) {
+        viewModelScope.launch {
+            repository.updateTitleAndFolder(noteId, title, folderId)
         }
     }
 
@@ -495,6 +512,32 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun appendQuickNote(noteId: Long, text: String) {
+        if (text.isBlank()) return
+        
+        viewModelScope.launch {
+            val tabs = repository.getTabsForNoteSync(noteId)
+            if (tabs.isEmpty()) {
+                // If no tabs (shouldn't happen with current architecture), create one
+                val newTab = NoteTab(
+                    noteId = noteId,
+                    content = text.trim()
+                )
+                repository.insertTab(newTab)
+            } else {
+                // Append to the last tab
+                val lastTab = tabs.last()
+                val separator = if (lastTab.content.isBlank()) "" else "\n\n"
+                val updatedContent = lastTab.content + separator + text.trim()
+                repository.updateTab(lastTab.copy(
+                    content = updatedContent,
+                    updatedAt = System.currentTimeMillis()
+                ))
+            }
+            rebuildNoteSummary(noteId)
+        }
+    }
+
     fun getGroupWithNotesById(groupId: Long) = noteGroupRepository.getGroupWithNotesById(groupId)
 
     // --- Tab Management ---
@@ -585,8 +628,32 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // --- Marker Management ---
+
+    fun getMarkersForTab(tabId: Long): Flow<List<TextMarker>> = repository.getMarkersForTab(tabId)
+
+    fun syncMarkers(tabId: Long, markers: List<TextMarker>) {
+        viewModelScope.launch {
+            val existing = repository.getMarkersForTabSync(tabId)
+            val existingIds = existing.map { it.id }.toSet()
+            val newIds = markers.map { it.id }.toSet()
+            
+            // Delete removed
+            existing.filter { it.id !in newIds }.forEach {
+                repository.deleteMarkerById(it.id)
+            }
+            
+            // Insert/Update new or changed
+            markers.forEach { marker ->
+                val matching = existing.find { it.id == marker.id }
+                if (matching == null || matching != marker) {
+                    repository.insertMarker(marker)
+                }
+            }
+        }
+    }
+
     private suspend fun rebuildNoteSummary(noteId: Long) {
-        val note = repository.getByIds(listOf(noteId)).firstOrNull() ?: return
         val tabs = repository.getTabsForNoteSync(noteId)
         
         // Combine tab titles and contents for search indexing and previews
@@ -595,9 +662,6 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
             "$titlePart${tab.content}"
         }
         
-        repository.update(note.copy(
-            content = combinedContent,
-            updatedAt = System.currentTimeMillis()
-        ))
+        repository.updateContent(noteId, combinedContent)
     }
 }

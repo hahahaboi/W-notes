@@ -14,6 +14,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -244,12 +245,23 @@ private fun EditorOverlayLayer(
     contentRelativeOffset: () -> Offset
 ) {
     val selectionColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+    val highlightColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f)
+    val colorScheme = MaterialTheme.colorScheme
     val cursorColor = MaterialTheme.colorScheme.primary
     
     // MEMOIZE normalized selections to avoid O(N*M) calculation during Draw phase
     val normalizedRanges = remember(snapshot.selection.ranges, snapshot.document.blocks) {
         snapshot.selection.ranges.map { com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(it, snapshot.document.blocks) }
     }
+    
+    val normalizedHighlight = remember(snapshot.navigationHighlightRange, snapshot.document.blocks) {
+        snapshot.navigationHighlightRange?.let { com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(it, snapshot.document.blocks) }
+    }
+    
+    val highlightAlpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (snapshot.navigationHighlightRange != null) 1f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 300)
+    )
 
     Canvas(
         modifier = Modifier
@@ -262,10 +274,10 @@ private fun EditorOverlayLayer(
     ) {
         val layoutResults = layoutState.layoutResults
         val blockOffsets = layoutState.blockOffsets
+        val blocks = snapshot.document.blocks
 
         // 1. Draw Selection Highlights
         if (snapshot.selection.isActive) {
-            val blocks = snapshot.document.blocks
             normalizedRanges.forEach { normalized ->
                 blocks.forEach { block ->
                     val layout = layoutResults[block.id] ?: return@forEach
@@ -289,6 +301,78 @@ private fun EditorOverlayLayer(
                                 translate(offset.x, offset.y)
                             }) {
                                 drawPath(path, selectionColor)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1a. Draw Persistent Marker Indicators
+        snapshot.markers.forEach { marker ->
+            val color = com.tv.wnotes.ui.editor.getMarkerTypeColor(marker.type, colorScheme).copy(alpha = 0.8f)
+
+            blocks.forEach { block ->
+                val layout = layoutResults[block.id] ?: return@forEach
+                val offset = blockOffsets[block.id] ?: Offset.Zero
+
+                val startIdx = blocks.indexOfFirst { it.id == marker.startBlockId }
+                val endIdx = blocks.indexOfFirst { it.id == marker.endBlockId }
+                val currentIdx = blocks.indexOfFirst { it.id == block.id }
+
+                if (currentIdx in startIdx..endIdx && startIdx != -1 && endIdx != -1) {
+                    val mStart = if (currentIdx == startIdx) marker.startOffset else 0
+                    val mEnd = if (currentIdx == endIdx) marker.endOffset else {
+                        if (block is com.tv.wnotes.ui.editor.engine.model.WTextBlock) block.text.length
+                        else if (block is com.tv.wnotes.ui.editor.engine.model.WChecklistBlock) block.text.length
+                        else 0
+                    }
+
+                    if (mStart < mEnd) {
+                        val path = layout.getPathForRange(mStart, mEnd)
+                        withTransform({
+                            translate(offset.x, offset.y)
+                        }) {
+                            drawPath(
+                                path = path,
+                                color = color,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                    width = 1.dp.toPx(),
+                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1b. Draw Navigation Highlight (Temporary)
+        if (highlightAlpha > 0f) {
+            normalizedHighlight?.let { normalized ->
+                val color = highlightColor.copy(alpha = highlightColor.alpha * highlightAlpha)
+                blocks.forEach { block ->
+                    val layout = layoutResults[block.id] ?: return@forEach
+                    val offset = blockOffsets[block.id] ?: Offset.Zero
+
+                    val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+                    val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+                    val currentIdx = blocks.indexOfFirst { it.id == block.id }
+
+                    if (currentIdx in startIdx..endIdx && startIdx != -1 && endIdx != -1) {
+                        val selectionStart = if (currentIdx == startIdx) normalized.anchor.offset else 0
+                        val selectionEnd = if (currentIdx == endIdx) normalized.focus.offset else {
+                            if (block is com.tv.wnotes.ui.editor.engine.model.WTextBlock) block.text.length
+                            else if (block is com.tv.wnotes.ui.editor.engine.model.WChecklistBlock) block.text.length
+                            else 0
+                        }
+
+                        if (selectionStart < selectionEnd) {
+                            val path = layout.getPathForRange(selectionStart, selectionEnd)
+                            withTransform({
+                                translate(offset.x, offset.y)
+                            }) {
+                                drawPath(path, color)
                             }
                         }
                     }

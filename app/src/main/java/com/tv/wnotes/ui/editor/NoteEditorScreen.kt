@@ -88,9 +88,14 @@ fun NoteEditorScreen(
     var lastTabCreatedFromSelection by remember { mutableStateOf(false) }
 
     // Automatically select the first tab if none is active
-    LaunchedEffect(tabs) {
-        if (activeTabId == null && tabs.isNotEmpty()) {
-            activeTabId = tabs.first().id
+    LaunchedEffect(tabs, editableNoteId) {
+        if (activeTabId == null) {
+            if (tabs.isNotEmpty()) {
+                activeTabId = tabs.first().id
+            } else if (editableNoteId != null) {
+                // Legacy note with no tabs? Create one.
+                viewModel.addTab(editableNoteId!!, content = currentNote?.content ?: "")
+            }
         }
     }
 
@@ -105,12 +110,30 @@ fun NoteEditorScreen(
     }
 
     val activeTab = tabs.find { it.id == activeTabId }
+    
+    // Wait for tab data to load if we have an activeTabId
+    // DELETED: handled above with annotations and markers
+
     val annotations by if (activeTabId != null) {
-        viewModel.getAnnotationsForTab(activeTabId!!).collectAsState(initial = emptyList())
+        viewModel.getAnnotationsForTab(activeTabId!!).collectAsState(initial = null)
     } else {
         remember { mutableStateOf(emptyList<ContextAnnotation>()) }
     }
+
+    val markers by if (activeTabId != null) {
+        viewModel.getMarkersForTab(activeTabId!!).collectAsState(initial = null)
+    } else {
+        remember { mutableStateOf(emptyList<com.tv.wnotes.data.local.entity.TextMarker>()) }
+    }
     
+    // Wait for data to load if we have an activeTabId
+    if (activeTabId != null && (activeTab == null || annotations == null || markers == null)) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+
     // Use the active tab ID as a key for the editor host so it swaps when tabs change
     val editorHost = rememberWEditorHost(
         initialDocument = WDocument(
@@ -119,7 +142,8 @@ fun NoteEditorScreen(
                 WTextBlock(id = "init", text = activeTab?.content ?: "")
             )
         ),
-        initialAnnotations = annotations,
+        initialAnnotations = annotations ?: emptyList(),
+        initialMarkers = markers ?: emptyList(),
         initialSnapshot = activeTabId?.let { tabSnapshots[it] },
         onMakeTab = { extractedText ->
             editableNoteId?.let { noteId ->
@@ -158,6 +182,13 @@ fun NoteEditorScreen(
     LaunchedEffect(editorSnapshot.annotations, activeTabId) {
         activeTabId?.let { tabId ->
             viewModel.syncAnnotations(tabId, editorSnapshot.annotations)
+        }
+    }
+
+    // Persist Markers
+    LaunchedEffect(editorSnapshot.markers, activeTabId) {
+        activeTabId?.let { tabId ->
+            viewModel.syncMarkers(tabId, editorSnapshot.markers)
         }
     }
     // -----------------------
@@ -236,21 +267,6 @@ fun NoteEditorScreen(
                 editableNoteId = note.id
                 title = note.title
                 selectedFolderId = note.folderId
-                
-                // Also update the next-gen editor engine if it's currently empty
-                if (editorHost.snapshot.value.document.blocks.size <= 1 && 
-                    editorHost.snapshot.value.document.blocks.firstOrNull()?.let { it is WTextBlock && it.text.isEmpty() } == true) {
-                    editorHost.engineState.updateSnapshot(
-                        editorHost.snapshot.value.copy(
-                            document = editorHost.snapshot.value.document.copy(
-                                id = note.id.toString(),
-                                blocks = kotlinx.collections.immutable.persistentListOf(
-                                    WTextBlock(id = "init", text = note.content)
-                                )
-                            )
-                        )
-                    )
-                }
             }
         }
     }
@@ -285,16 +301,9 @@ fun NoteEditorScreen(
                 }
             }
 
-            currentNote?.let {
-                if (it.title != title || it.folderId != selectedFolderId) {
-                    val updated = it.copy(
-                        title = title.ifBlank { it.title },
-                        folderId = selectedFolderId,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                    viewModel.updateNote(updated)
-                    currentNote = updated
-                }
+            if (currentNote?.title != title || currentNote?.folderId != selectedFolderId) {
+                viewModel.updateNoteTitleAndFolder(editableNoteId!!, title, selectedFolderId)
+                currentNote = currentNote?.copy(title = title, folderId = selectedFolderId)
             }
         }
     }

@@ -26,6 +26,18 @@ class WLayoutState : WLayoutProvider {
     override var currentBlocks by mutableStateOf<List<WBlock>>(emptyList())
     override var currentAnnotations by mutableStateOf<List<com.tv.wnotes.data.local.entity.ContextAnnotation>>(emptyList())
     
+    // Internal index to avoid O(N) filtering in hit-tests
+    private var annotationIndex = emptyMap<String, List<com.tv.wnotes.data.local.entity.ContextAnnotation>>()
+
+    fun updateAnnotations(annotations: List<com.tv.wnotes.data.local.entity.ContextAnnotation>) {
+        currentAnnotations = annotations
+        annotationIndex = annotations.groupBy { it.blockId }
+    }
+
+    override fun getAnnotationsForBlock(blockId: String): List<com.tv.wnotes.data.local.entity.ContextAnnotation> {
+        return annotationIndex[blockId] ?: emptyList()
+    }
+
     override fun getSelectionPointForOffset(offset: Offset): WSelectionPoint? {
         return hitTest(offset)?.let {
             WSelectionPoint(it.blockId, it.characterIndex)

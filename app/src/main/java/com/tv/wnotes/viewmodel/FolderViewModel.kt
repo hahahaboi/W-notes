@@ -20,7 +20,7 @@ data class FolderStats(
 class FolderViewModel(application: Application) : AndroidViewModel(application) {
     private val database = WNotesDatabase.getDatabase(application)
     private val folderRepository = FolderRepository(database.folderDao())
-    private val noteRepository = NoteRepository(database.noteDao(), database.noteTabDao(), database.annotationDao())
+    private val noteRepository = NoteRepository(database.noteDao(), database.noteTabDao(), database.annotationDao(), database.markerDao())
 
     val allFolders: StateFlow<List<Folder>> = folderRepository.allFolders
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())

@@ -18,6 +18,14 @@ import com.tv.wnotes.ui.editor.engine.logic.WEditorCommand
 import com.tv.wnotes.ui.editor.engine.renderer.WDragAnimationController
 import com.tv.wnotes.ui.editor.engine.logic.WDragInternalState
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.animation.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.*
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 
 /**
  * Root composable of the next-generation editor.
@@ -35,11 +43,11 @@ fun WEditor(
     val scope = rememberCoroutineScope()
     val animController = remember { WDragAnimationController(scope) }
     val focusRequester = remember { FocusRequester() }
-    val density = androidx.compose.ui.platform.LocalDensity.current.density
+    val density = androidx.compose.ui.platform.LocalDensity.current
     
     // Sync density with layout state
     SideEffect {
-        layoutState.density = density
+        layoutState.density = density.density
     }
     
     var gestureText by remember { mutableStateOf("Gesture: IDLE") }
@@ -94,7 +102,7 @@ fun WEditor(
     SideEffect {
         layoutState.currentSelection = selection
         layoutState.currentBlocks = snapshot.document.blocks
-        layoutState.currentAnnotations = snapshot.annotations
+        layoutState.updateAnnotations(snapshot.annotations)
         layoutState.density = currentDensity
     }
 
@@ -145,55 +153,155 @@ fun WEditor(
         }
     }
 
+    // Navigation Scrolling Logic
+    LaunchedEffect(snapshot.navigationHighlightRange, snapshot.document.revision) {
+        val range = snapshot.navigationHighlightRange ?: return@LaunchedEffect
+        
+        // Wait a frame for layout to settle
+        kotlinx.coroutines.yield()
+        
+        val viewportHeight = editorCoordinates?.size?.height ?: 0
+        if (viewportHeight <= 0) return@LaunchedEffect
+
+        val margin = with(density) { 60.dp.toPx() }
+        val currentScroll = scrollState.value.toFloat()
+
+        // Calculate the bounding box of the highlighted range
+        val blocks = snapshot.document.blocks
+        val startBlockIdx = blocks.indexOfFirst { it.id == range.anchor.blockId }
+        val endBlockIdx = blocks.indexOfFirst { it.id == range.focus.blockId }
+        
+        if (startBlockIdx == -1 || endBlockIdx == -1) return@LaunchedEffect
+        
+        var minTop = Float.MAX_VALUE
+        var maxBottom = Float.MIN_VALUE
+        
+        for (i in startBlockIdx..endBlockIdx) {
+            val blockId = blocks[i].id
+            val blockOffset = layoutState.blockOffsets[blockId] ?: continue
+            val layout = layoutState.layoutResults[blockId] ?: continue
+            
+            val start = if (i == startBlockIdx) range.anchor.offset else 0
+            val end = if (i == endBlockIdx) range.focus.offset else layout.layoutInput.text.length
+            
+            if (start < end) {
+                val path = layout.getPathForRange(start, end)
+                val bounds = path.getBounds()
+                minTop = minOf(minTop, bounds.top + blockOffset.y)
+                maxBottom = maxOf(maxBottom, bounds.bottom + blockOffset.y)
+            }
+        }
+        
+        if (minTop != Float.MAX_VALUE) {
+            val targetHeight = maxBottom - minTop
+            val isFullyVisible = minTop >= currentScroll + margin && maxBottom <= currentScroll + viewportHeight - margin
+            
+            if (!isFullyVisible) {
+                val targetScroll = if (targetHeight > viewportHeight - 2 * margin) {
+                    // Range is larger than viewport, just scroll to top of range with margin
+                    minTop - margin
+                } else {
+                    // Center the range in the viewport
+                    minTop + targetHeight / 2f - viewportHeight / 2f
+                }
+                
+                scrollState.animateScrollTo(
+                    targetScroll.toInt().coerceIn(0, scrollState.maxValue),
+                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 400)
+                )
+            }
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .onGloballyPositioned { editorCoordinates = it }
     ) {
-        if (editorCoordinates != null) {
-            // 3. Input Layer (Hidden Proxy) - Zero-sized and below gestures
-            // Moved inside the if-block to ensure it is only placed when parent coordinates are ready.
-            WEditorInputLayer(
-                host = host,
-                focusRequester = focusRequester,
-                onPlaced = { isInputLayerPlaced = true }
-            )
+        Row(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            ) {
+                if (editorCoordinates != null) {
+                    // 3. Input Layer (Hidden Proxy) - Zero-sized and below gestures
+                    // Moved inside the if-block to ensure it is only placed when parent coordinates are ready.
+                    WEditorInputLayer(
+                        host = host,
+                        focusRequester = focusRequester,
+                        onPlaced = { isInputLayerPlaced = true }
+                    )
 
-            // 1. Content Surface
-            WEditorSurface(
-                snapshot = snapshot,
-                layoutState = layoutState,
-                editorCoordinates = editorCoordinates,
-                animController = animController,
-                cursorBlinkVisible = cursorBlinkVisible,
-                scrollState = scrollState,
-                title = title,
-                onTitleChange = onTitleChange,
-                gestureCoordinator = host.gestureCoordinator,
-                focusRequester = focusRequester,
-                onGestureDetected = { gestureText = it },
-                onCaretRendered = {
-                    host.engineState.updateTelemetry { it.copy(currentStage = 6, dropCaretVisible = true) }
-                },
-                onContentPositioned = { contentRelativeOffset = it },
-                modifier = Modifier.fillMaxSize()
-            )
+                    // 1. Content Surface
+                    WEditorSurface(
+                        snapshot = snapshot,
+                        layoutState = layoutState,
+                        editorCoordinates = editorCoordinates,
+                        animController = animController,
+                        cursorBlinkVisible = cursorBlinkVisible,
+                        scrollState = scrollState,
+                        title = title,
+                        onTitleChange = onTitleChange,
+                        gestureCoordinator = host.gestureCoordinator,
+                        focusRequester = focusRequester,
+                        onGestureDetected = { gestureText = it },
+                        onCaretRendered = {
+                            host.engineState.updateTelemetry { it.copy(currentStage = 6, dropCaretVisible = true) }
+                        },
+                        onContentPositioned = { contentRelativeOffset = it },
+                        modifier = Modifier.fillMaxSize()
+                    )
 
-            // 2. Interaction Overlay (Drag Preview, Multi-Selection Toolbar)
-            // Stays on top to allow toolbar clicks
-            WEditorOverlay(
-                snapshot = snapshot,
-                layoutState = layoutState,
-                animController = animController,
-                onCommand = { host.gestureCoordinator.onCommand(it) },
-                contentRelativeOffset = { contentRelativeOffset },
-                modifier = Modifier.fillMaxSize()
-            )
+                    // 2. Interaction Overlay (Drag Preview, Multi-Selection Toolbar)
+                    // Stays on top to allow toolbar clicks
+                    WEditorOverlay(
+                        snapshot = snapshot,
+                        layoutState = layoutState,
+                        animController = animController,
+                        onCommand = { host.gestureCoordinator.onCommand(it) },
+                        contentRelativeOffset = { contentRelativeOffset },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    
+                    // Sidebar Toggle Button (Arrow)
+                    IconButton(
+                        onClick = { host.dispatchCommand(WEditorCommand.ToggleMarkerSidebar) },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 8.dp, end = 8.dp)
+                            .size(32.dp)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                            .semantics { 
+                                contentDescription = if (snapshot.isMarkerSidebarOpen) "Close text markers" else "Open text markers"
+                            }
+                    ) {
+                        Icon(
+                            imageVector = if (snapshot.isMarkerSidebarOpen) Icons.AutoMirrored.Filled.KeyboardArrowRight else Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
 
-            // 5. Scrollbar Layer - TOPMOST
+            // 4. Marker Sidebar Layer
+            androidx.compose.animation.AnimatedVisibility(
+                visible = snapshot.isMarkerSidebarOpen,
+                enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+                exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut()
+            ) {
+                WMarkerSidebar(
+                    snapshot = snapshot,
+                    onCommand = { host.dispatchCommand(it) }
+                )
+            }
+
+            // 5. Scrollbar Layer - Fixed at the extreme right
             com.tv.wnotes.ui.components.WScrollbar(
                 scrollState = scrollState,
-                modifier = Modifier.align(Alignment.CenterEnd)
+                modifier = Modifier.fillMaxHeight()
             )
         }
 

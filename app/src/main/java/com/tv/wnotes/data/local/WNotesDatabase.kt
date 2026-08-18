@@ -12,11 +12,12 @@ import com.tv.wnotes.data.local.dao.NoteDao
 import com.tv.wnotes.data.local.dao.NoteGroupDao
 import com.tv.wnotes.data.local.dao.NoteTabDao
 import com.tv.wnotes.data.local.dao.AnnotationDao
+import com.tv.wnotes.data.local.dao.MarkerDao
 import com.tv.wnotes.data.local.entity.*
 
 @Database(
-    entities = [Note::class, Folder::class, LinkPath::class, PathMember::class, NoteGroup::class, NoteGroupMember::class, NoteTab::class, ContextAnnotation::class],
-    version = 9,
+    entities = [Note::class, Folder::class, LinkPath::class, PathMember::class, NoteGroup::class, NoteGroupMember::class, NoteTab::class, ContextAnnotation::class, TextMarker::class],
+    version = 11,
     exportSchema = false
 )
 abstract class WNotesDatabase : RoomDatabase() {
@@ -26,6 +27,7 @@ abstract class WNotesDatabase : RoomDatabase() {
     abstract fun noteGroupDao(): NoteGroupDao
     abstract fun noteTabDao(): NoteTabDao
     abstract fun annotationDao(): AnnotationDao
+    abstract fun markerDao(): MarkerDao
 
     companion object {
         @Volatile
@@ -55,6 +57,12 @@ abstract class WNotesDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE text_markers ADD COLUMN type TEXT NOT NULL DEFAULT 'DEFAULT'")
+            }
+        }
+
         fun getDatabase(context: Context): WNotesDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -62,7 +70,7 @@ abstract class WNotesDatabase : RoomDatabase() {
                     WNotesDatabase::class.java,
                     "wnotes_database"
                 )
-                    .addMigrations(MIGRATION_7_8)
+                    .addMigrations(MIGRATION_7_8, MIGRATION_10_11)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

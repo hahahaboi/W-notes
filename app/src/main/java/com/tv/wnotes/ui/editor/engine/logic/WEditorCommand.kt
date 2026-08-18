@@ -67,6 +67,18 @@ sealed interface WEditorCommand {
     data class StartCreatingAnnotation(val range: WSelectionRange, val anchorText: String) : WEditorCommand
     data object CancelCreatingAnnotation : WEditorCommand
 
+    // Text Markers
+    data object ToggleMarkerSidebar : WEditorCommand
+    data class CreateMarker(val label: String, val range: WSelectionRange, val anchorText: String) : WEditorCommand
+    data class UpdateMarkerLabel(val id: String, val newLabel: String) : WEditorCommand
+    data class UpdateMarkerType(val id: String, val newType: com.tv.wnotes.data.local.entity.MarkerType) : WEditorCommand
+    data class DeleteMarker(val id: String) : WEditorCommand
+    data class NavigateToMarker(val markerId: String) : WEditorCommand
+    data object NavigateToNextMarker : WEditorCommand
+    data object NavigateToPreviousMarker : WEditorCommand
+    data object OpenQuickJump : WEditorCommand
+    data object CloseQuickJump : WEditorCommand
+
     // Telemetry
     data class UpdateTelemetry(val transform: (com.tv.wnotes.ui.editor.engine.state.WTelemetryState) -> com.tv.wnotes.ui.editor.engine.state.WTelemetryState) : WEditorCommand
 }

@@ -1,6 +1,7 @@
 package com.tv.wnotes.ui.editor.engine.logic
 
 import com.tv.wnotes.data.local.entity.ContextAnnotation
+import com.tv.wnotes.data.local.entity.TextMarker
 import com.tv.wnotes.ui.editor.engine.model.*
 import com.tv.wnotes.ui.editor.engine.state.*
 import kotlinx.collections.immutable.toImmutableList
@@ -173,6 +174,14 @@ object WMutationEngine {
             point.offset,
             text.length
         )
+
+        // Update existing markers
+        val shiftedMarkers = WMarkerManager.shiftMarkersForInsertion(
+            snapshot.markers,
+            point.blockId,
+            point.offset,
+            text.length
+        )
         
         // Add moved annotations
         val finalAnnotations = shiftedAnnotations + newAnns.map { ann ->
@@ -186,8 +195,10 @@ object WMutationEngine {
                 revision = snapshot.document.revision + 1
             ),
             annotations = finalAnnotations.toImmutableList(),
+            markers = shiftedMarkers.toImmutableList(),
             cursor = snapshot.cursor.copy(position = newCursor, blinkVisible = true),
-            selection = WSelectionManager.collapseTo(newCursor)
+            selection = WSelectionManager.collapseTo(newCursor),
+            activeAnnotationId = null
         )
         
         return WMutationResult.Success(snapshot = newSnapshot, mutationType = WMutationType.MOVE_RANGE, affectedBlockIds = setOf(point.blockId), affectedCharacterCount = text.length)
@@ -219,6 +230,14 @@ object WMutationEngine {
             text.length
         )
 
+        // Update Markers
+        val newMarkers = WMarkerManager.shiftMarkersForInsertion(
+            snapshot.markers,
+            cursor.blockId,
+            cursor.offset,
+            text.length
+        )
+
         val newPoint = WSelectionPoint(block.id, cursor.offset + text.length)
         
         val nextSnapshot = snapshot.copy(
@@ -227,8 +246,10 @@ object WMutationEngine {
                 revision = snapshot.document.revision + 1
             ),
             annotations = newAnnotations.toImmutableList(),
+            markers = newMarkers.toImmutableList(),
             cursor = snapshot.cursor.copy(position = newPoint, blinkVisible = true),
-            selection = WSelectionManager.collapseTo(newPoint)
+            selection = WSelectionManager.collapseTo(newPoint),
+            activeAnnotationId = null
         )
 
         return WMutationResult.Success(
@@ -265,12 +286,29 @@ object WMutationEngine {
             text.length
         )
 
+        // Markers: simplified for replacement (shift start, then end)
+        var shiftedMarkers = WMarkerManager.shiftMarkersForDeletion(
+            snapshot.markers,
+            range.anchor.blockId,
+            range.anchor.offset,
+            range.focus.offset,
+            snapshot.document.blocks
+        )
+        shiftedMarkers = WMarkerManager.shiftMarkersForInsertion(
+            shiftedMarkers,
+            range.anchor.blockId,
+            range.anchor.offset,
+            text.length
+        )
+
         val newPoint = WSelectionPoint(range.anchor.blockId, range.anchor.offset + text.length)
         val nextSnapshot = snapshot.copy(
             document = snapshot.document.copy(blocks = blocks.toImmutableList(), revision = snapshot.document.revision + 1),
             annotations = newAnns.toImmutableList(),
+            markers = shiftedMarkers.toImmutableList(),
             cursor = snapshot.cursor.copy(position = newPoint),
-            selection = WSelectionManager.collapseTo(newPoint)
+            selection = WSelectionManager.collapseTo(newPoint),
+            activeAnnotationId = null
         )
 
         return WMutationResult.Success(nextSnapshot, WMutationType.REPLACE_RANGE, setOf(range.anchor.blockId), text.length)
@@ -300,6 +338,14 @@ object WMutationEngine {
                 cursor.offset
             )
 
+            val newMarkers = WMarkerManager.shiftMarkersForDeletion(
+                snapshot.markers,
+                cursor.blockId,
+                cursor.offset - 1,
+                cursor.offset,
+                snapshot.document.blocks
+            )
+
             val newPoint = cursor.copy(offset = cursor.offset - 1)
             val nextSnapshot = snapshot.copy(
                 document = snapshot.document.copy(
@@ -307,8 +353,10 @@ object WMutationEngine {
                     revision = snapshot.document.revision + 1
                 ),
                 annotations = newAnnotations.toImmutableList(),
+                markers = newMarkers.toImmutableList(),
                 cursor = snapshot.cursor.copy(position = newPoint, blinkVisible = true),
-                selection = WSelectionManager.collapseTo(newPoint)
+                selection = WSelectionManager.collapseTo(newPoint),
+                activeAnnotationId = null
             )
             return WMutationResult.Success(nextSnapshot, WMutationType.DELETE_RANGE, setOf(cursor.blockId), 1)
         } else {
@@ -343,6 +391,14 @@ object WMutationEngine {
             prevTextLen
         )
 
+        // Merge Markers
+        val currentMarkers = WMarkerManager.mergeMarkers(
+            snapshot.markers,
+            prevBlock.id,
+            blockId,
+            prevTextLen
+        )
+
         blocks.removeAt(index)
         blocks[index - 1] = mergedBlock
 
@@ -353,8 +409,10 @@ object WMutationEngine {
                 revision = snapshot.document.revision + 1
             ),
             annotations = currentAnnotations.toImmutableList(),
+            markers = currentMarkers.toImmutableList(),
             cursor = snapshot.cursor.copy(position = newPoint, blinkVisible = true),
-            selection = WSelectionManager.collapseTo(newPoint)
+            selection = WSelectionManager.collapseTo(newPoint),
+            activeAnnotationId = null
         )
         return WMutationResult.Success(nextSnapshot, WMutationType.DELETE_RANGE, setOf(prevBlock.id, blockId), 0)
     }
@@ -391,13 +449,23 @@ object WMutationEngine {
             cursor.offset,
             cursor.offset + 1
         )
+
+        val newMarkers = WMarkerManager.shiftMarkersForDeletion(
+            snapshot.markers,
+            cursor.blockId,
+            cursor.offset,
+            cursor.offset + 1,
+            snapshot.document.blocks
+        )
         
         val nextSnapshot = snapshot.copy(
             document = snapshot.document.copy(
                 blocks = blocks.toImmutableList(), 
                 revision = snapshot.document.revision + 1
             ),
-            annotations = newAnnotations.toImmutableList()
+            annotations = newAnnotations.toImmutableList(),
+            markers = newMarkers.toImmutableList(),
+            activeAnnotationId = null
         )
         
         return WMutationResult.Success(
@@ -546,6 +614,14 @@ object WMutationEngine {
                 normalized.focus.offset
             )
 
+            val newMarkers = WMarkerManager.shiftMarkersForDeletion(
+                snapshot.markers,
+                block.id,
+                normalized.anchor.offset,
+                normalized.focus.offset,
+                snapshot.document.blocks
+            )
+
             val newPoint = WSelectionPoint(block.id, normalized.anchor.offset)
             val nextSnapshot = snapshot.copy(
                 document = snapshot.document.copy(
@@ -553,8 +629,10 @@ object WMutationEngine {
                     revision = snapshot.document.revision + 1
                 ),
                 annotations = newAnnotations.toImmutableList(),
+                markers = newMarkers.toImmutableList(),
                 cursor = snapshot.cursor.copy(position = newPoint),
-                selection = WSelectionManager.collapseTo(newPoint)
+                selection = WSelectionManager.collapseTo(newPoint),
+                activeAnnotationId = null
             )
             return WMutationResult.Success(nextSnapshot, WMutationType.DELETE_RANGE, setOf(block.id), 0)
         } else {
@@ -600,6 +678,29 @@ object WMutationEngine {
             val middleBlockIds = blocks.subList(startIdx + 1, endIdx).map { it.id }.toSet()
             currentAnnotations = currentAnnotations.filter { it.blockId !in middleBlockIds }
 
+            // Markers Multi-block deletion
+            val currentMarkers = WMarkerManager.shiftMarkersForDeletion(
+                snapshot.markers,
+                startBlock.id,
+                normalized.anchor.offset,
+                startBlock.text.length,
+                snapshot.document.blocks
+            ).let { m1 ->
+                WMarkerManager.shiftMarkersForDeletion(
+                    m1,
+                    endBlock.id,
+                    0,
+                    normalized.focus.offset,
+                    snapshot.document.blocks
+                )
+            }.map { marker ->
+                if (marker.startBlockId == endBlock.id) marker.copy(startBlockId = startBlock.id, startOffset = marker.startOffset + remainingHead.length)
+                else marker
+            }.map { marker ->
+                if (marker.endBlockId == endBlock.id) marker.copy(endBlockId = startBlock.id, endOffset = marker.endOffset + remainingHead.length)
+                else marker
+            }.filter { it.startBlockId !in middleBlockIds && it.endBlockId !in middleBlockIds }
+
             blocks.subList(startIdx, endIdx + 1).clear()
             blocks.add(startIdx, mergedBlock)
 
@@ -610,8 +711,10 @@ object WMutationEngine {
                     revision = snapshot.document.revision + 1
                 ),
                 annotations = currentAnnotations.toImmutableList(),
+                markers = currentMarkers.toImmutableList(),
                 cursor = snapshot.cursor.copy(position = newPoint),
-                selection = WSelectionManager.collapseTo(newPoint)
+                selection = WSelectionManager.collapseTo(newPoint),
+                activeAnnotationId = null
             )
             return WMutationResult.Success(nextSnapshot, WMutationType.DELETE_RANGE, setOf(startBlock.id, endBlock.id) + middleBlockIds, 0)
         }
@@ -653,6 +756,14 @@ object WMutationEngine {
             cursor.offset
         )
 
+        // Split Markers
+        val newMarkers = WMarkerManager.splitMarkers(
+            snapshot.markers,
+            block.id,
+            newTailId,
+            cursor.offset
+        )
+
         val newPoint = WSelectionPoint(newTailId, 0)
         val nextSnapshot = snapshot.copy(
             document = snapshot.document.copy(
@@ -660,8 +771,10 @@ object WMutationEngine {
                 revision = snapshot.document.revision + 1
             ),
             annotations = newAnnotations.toImmutableList(),
+            markers = newMarkers.toImmutableList(),
             cursor = snapshot.cursor.copy(position = newPoint, blinkVisible = true),
-            selection = WSelectionManager.collapseTo(newPoint)
+            selection = WSelectionManager.collapseTo(newPoint),
+            activeAnnotationId = null
         )
         
         return WMutationResult.Success(
@@ -726,7 +839,10 @@ object WMutationEngine {
         val nextSnapshot = snapshot.copy(
             annotations = (snapshot.annotations + annotation).toImmutableList(),
             selection = WSelectionManager.collapseTo(normalized.focus),
-            cursor = snapshot.cursor.copy(position = normalized.focus, isVisible = true)
+            cursor = snapshot.cursor.copy(position = normalized.focus, isVisible = true),
+            isCreatingAnnotation = false,
+            pendingAnnotationRange = null,
+            pendingAnnotationAnchorText = ""
         )
         return WMutationResult.Success(nextSnapshot, WMutationType.ANNOTATE_RANGE, setOf(normalized.anchor.blockId), 0)
     }
@@ -754,6 +870,61 @@ object WMutationEngine {
             annotations = newAnnotations.toImmutableList(),
             activeAnnotationId = if (snapshot.activeAnnotationId == id) null else snapshot.activeAnnotationId
         )
+        return WMutationResult.Success(nextSnapshot, WMutationType.DELETE_ANNOTATION, emptySet(), 0)
+    }
+
+    // --- Text Marker Methods ---
+
+    fun createMarker(snapshot: WEditorSnapshot, label: String, range: WSelectionRange, anchorText: String): WMutationResult {
+        if (label.isBlank()) return WMutationResult.Failure("Marker label cannot be empty", WMutationType.ANNOTATE_RANGE)
+        
+        val normalized = WSelectionManager.normalize(range, snapshot.document.blocks)
+        
+        // Prevent exact duplicates
+        val exists = snapshot.markers.any { 
+            it.startBlockId == normalized.anchor.blockId && it.startOffset == normalized.anchor.offset &&
+            it.endBlockId == normalized.focus.blockId && it.endOffset == normalized.focus.offset 
+        }
+        if (exists) return WMutationResult.Failure("Marker already exists for this selection", WMutationType.ANNOTATE_RANGE)
+
+        val marker = TextMarker(
+            tabId = snapshot.document.id.toLongOrNull() ?: -1L,
+            startBlockId = normalized.anchor.blockId,
+            startOffset = normalized.anchor.offset,
+            endBlockId = normalized.focus.blockId,
+            endOffset = normalized.focus.offset,
+            anchorText = anchorText,
+            label = label
+        )
+
+        val nextSnapshot = snapshot.copy(
+            markers = (snapshot.markers + marker).toImmutableList(),
+            selection = WSelectionManager.collapseTo(normalized.focus),
+            cursor = snapshot.cursor.copy(position = normalized.focus, isVisible = true)
+        )
+        return WMutationResult.Success(nextSnapshot, WMutationType.ANNOTATE_RANGE, emptySet(), 0)
+    }
+
+    fun updateMarkerLabel(snapshot: WEditorSnapshot, id: String, newLabel: String): WMutationResult {
+        if (newLabel.isBlank()) return WMutationResult.Failure("Label cannot be empty", WMutationType.UPDATE_ANNOTATION)
+        val newMarkers = snapshot.markers.map {
+            if (it.id == id) it.copy(label = newLabel) else it
+        }
+        val nextSnapshot = snapshot.copy(markers = newMarkers.toImmutableList())
+        return WMutationResult.Success(nextSnapshot, WMutationType.UPDATE_ANNOTATION, emptySet(), 0)
+    }
+
+    fun updateMarkerType(snapshot: WEditorSnapshot, id: String, newType: com.tv.wnotes.data.local.entity.MarkerType): WMutationResult {
+        val newMarkers = snapshot.markers.map {
+            if (it.id == id) it.copy(type = newType) else it
+        }
+        val nextSnapshot = snapshot.copy(markers = newMarkers.toImmutableList())
+        return WMutationResult.Success(nextSnapshot, WMutationType.UPDATE_ANNOTATION, emptySet(), 0)
+    }
+
+    fun deleteMarker(snapshot: WEditorSnapshot, id: String): WMutationResult {
+        val newMarkers = snapshot.markers.filter { it.id != id }
+        val nextSnapshot = snapshot.copy(markers = newMarkers.toImmutableList())
         return WMutationResult.Success(nextSnapshot, WMutationType.DELETE_ANNOTATION, emptySet(), 0)
     }
 }

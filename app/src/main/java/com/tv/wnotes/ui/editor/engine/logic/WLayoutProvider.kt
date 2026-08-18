@@ -68,4 +68,9 @@ interface WLayoutProvider {
      * Current list of annotations.
      */
     val currentAnnotations: List<com.tv.wnotes.data.local.entity.ContextAnnotation>
+
+    /**
+     * Efficiently retrieves annotations for a specific block.
+     */
+    fun getAnnotationsForBlock(blockId: String): List<com.tv.wnotes.data.local.entity.ContextAnnotation>
 }
