@@ -730,8 +730,9 @@ fun HomeScreen(
         if (showQuickNoteInput && quickNoteTargetId != null) {
             QuickNoteInput(
                 onDismiss = { text ->
-                    if (text.isNotBlank()) {
-                        viewModel.appendQuickNote(quickNoteTargetId!!, text)
+                    val targetId = quickNoteTargetId
+                    if (targetId != null && text.isNotBlank()) {
+                        viewModel.appendQuickNote(targetId, text)
                     }
                     showQuickNoteInput = false
                     quickNoteTargetId = null

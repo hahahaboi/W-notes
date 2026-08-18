@@ -518,10 +518,15 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val tabs = repository.getTabsForNoteSync(noteId)
             if (tabs.isEmpty()) {
-                // If no tabs (shouldn't happen with current architecture), create one
+                // Handle legacy/new notes that don't have tabs yet
+                val currentNote = database.noteDao().getNoteById(noteId)
+                val existingContent = currentNote?.content ?: ""
+                val separator = if (existingContent.isBlank()) "" else "\n\n"
+                val newContent = existingContent + separator + text.trim()
+                
                 val newTab = NoteTab(
                     noteId = noteId,
-                    content = text.trim()
+                    content = newContent
                 )
                 repository.insertTab(newTab)
             } else {

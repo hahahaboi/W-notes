@@ -714,8 +714,9 @@ fun NoteWorkspaceScreen(
             if (showQuickNoteInput && quickNoteTargetId != null) {
                 QuickNoteInput(
                     onDismiss = { text ->
-                        if (text.isNotBlank()) {
-                            noteViewModel.appendQuickNote(quickNoteTargetId!!, text)
+                        val targetId = quickNoteTargetId
+                        if (targetId != null && text.isNotBlank()) {
+                            noteViewModel.appendQuickNote(targetId, text)
                         }
                         showQuickNoteInput = false
                         quickNoteTargetId = null

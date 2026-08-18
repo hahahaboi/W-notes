@@ -1,6 +1,5 @@
 package com.tv.wnotes.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -27,13 +26,26 @@ fun QuickNoteInput(
     var text by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
+    
+    // Track if we've already submitted to avoid double calls
+    var submitted by remember { mutableStateOf(false) }
+    
+    val currentOnDismiss by rememberUpdatedState(onDismiss)
+    val currentText by rememberUpdatedState(text)
+
+    val submit = {
+        if (!submitted) {
+            submitted = true
+            currentOnDismiss(currentText)
+        }
+    }
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
     }
 
     Popup(
-        onDismissRequest = { onDismiss(text) },
+        onDismissRequest = { submit() },
         properties = PopupProperties(focusable = true)
     ) {
         Surface(
@@ -68,7 +80,7 @@ fun QuickNoteInput(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = {
                         focusManager.clearFocus()
-                        onDismiss(text)
+                        submit()
                     })
                 )
             }
