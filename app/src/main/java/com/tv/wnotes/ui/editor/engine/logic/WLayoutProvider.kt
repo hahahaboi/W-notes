@@ -33,4 +33,39 @@ interface WLayoutProvider {
      * Performs a hit-test to find the document position at a given screen offset.
      */
     fun hitTest(offset: Offset): WHitResult?
+
+    /**
+     * Returns the vertical pixel offset of the document's end.
+     */
+    fun getDocumentBottom(): Float
+
+    /**
+     * Returns the bounding boxes of a specific annotation.
+     */
+    fun getAnnotationBounds(annotationId: String): List<Rect>
+
+    /**
+     * Returns the full geometry of a specific annotation.
+     */
+    fun getAnnotationGeometry(annotationId: String): AnnotationGeometry?
+
+    /**
+     * Current display density.
+     */
+    val density: Float
+
+    /**
+     * Current selection state.
+     */
+    val currentSelection: com.tv.wnotes.ui.editor.engine.state.WSelectionState?
+
+    /**
+     * Current list of blocks.
+     */
+    val currentBlocks: List<com.tv.wnotes.ui.editor.engine.model.WBlock>
+
+    /**
+     * Current list of annotations.
+     */
+    val currentAnnotations: List<com.tv.wnotes.data.local.entity.ContextAnnotation>
 }

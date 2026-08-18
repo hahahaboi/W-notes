@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.unit.dp
 import com.tv.wnotes.ui.editor.engine.state.WSelectionHandleState
@@ -18,13 +19,22 @@ import com.tv.wnotes.ui.editor.engine.state.WSelectionState
 @Composable
 fun WSelectionHandleRenderer(
     selectionState: WSelectionState,
+    contentRelativeOffset: () -> Offset = { Offset.Zero },
     modifier: Modifier = Modifier
 ) {
     if (!selectionState.isActive) return
 
     val handleColor = MaterialTheme.colorScheme.primary
 
-    Canvas(modifier = modifier.fillMaxSize()) {
+    Canvas(
+        modifier = modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                val offset = contentRelativeOffset()
+                translationX = offset.x
+                translationY = offset.y
+            }
+    ) {
         if (selectionState.startHandle.isVisible) {
             drawHandle(selectionState.startHandle, handleColor)
         }
@@ -41,16 +51,9 @@ private fun DrawScope.drawHandle(
     val pos = handle.position
     if (pos == Offset.Unspecified) return
 
-    val knobRadius = 6.dp.toPx()
+    val knobRadius = 8.dp.toPx() // Increased size for better touch/visibility
     val stemWidth = 2.dp.toPx()
-    val stemHeight = 20.dp.toPx() // Approximate, should ideally match text height
-
-    // Draw knob
-    drawCircle(
-        color = color,
-        radius = knobRadius,
-        center = pos
-    )
+    val stemHeight = 22.dp.toPx() // Better fit for standard text heights
 
     // Draw stem (vertical line up from knob)
     drawLine(
@@ -58,5 +61,19 @@ private fun DrawScope.drawHandle(
         start = pos,
         end = Offset(pos.x, pos.y - stemHeight),
         strokeWidth = stemWidth
+    )
+
+    // Draw knob (at the bottom of the stem)
+    drawCircle(
+        color = color,
+        radius = knobRadius,
+        center = pos
+    )
+    
+    // Inner white dot for extra contrast
+    drawCircle(
+        color = Color.White,
+        radius = 2.dp.toPx(),
+        center = pos
     )
 }

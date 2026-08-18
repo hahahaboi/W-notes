@@ -1,40 +1,26 @@
-# Walkthrough - WEditor Stage 11.5: Virtual Drop Area Below Document
+# Walkthrough - Note Creation in Staples
 
-I have implemented the "Virtual Drop Area" feature, allowing users to drag text multiple lines below the current document content. The editor will automatically create the necessary empty lines when the text is dropped.
+I have implemented the ability to create new notes directly from within a Staple (LinkPath).
 
-## Key Changes
+## Changes Made
 
-### 1. Enhanced Hit-Testing
+### UI Enhancements
+#### [PathDetailScreen.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/paths/PathDetailScreen.kt)
+- Added a Floating Action Button (FAB) to the Staple detail view.
+- Tapping the FAB navigates to the Note Editor with the current `pathId`.
 
-#### [WHitTestEngine.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/editor/engine/logic/WHitTestEngine.kt)
-- **Below-Document Detection**: The hit-test engine now explicitly detects when the pointer is moved below the final block of the document.
-- **Smart Clamping**: When below the document, it still identifies the last block as the semantic target but flags the result as `isBelowDocument`.
-
-### 2. Live Virtual Caret
-
-#### [WInsertionCaretManager.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/editor/engine/logic/WInsertionCaretManager.kt)
-- **Virtual Line Calculation**: Added logic to calculate exactly how many virtual lines the finger is below the document, based on the current line height.
-- **Caret Repositioning**: The insertion caret now follows the finger smoothly below the document, snapping to virtual line intervals instead of being clamped to the last character.
-
-### 3. Atomic "Drop & Expand"
-
-#### [WMutationEngine.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/editor/engine/logic/WMutationEngine.kt)
-- **Newline Insertion**: Upgraded the `MOVE_RANGE` logic to automatically prepend the required number of `\n` characters if a drop occurs in a virtual area.
-- **Atomic History**: The line insertion and text movement are performed as a single atomic operation, ensuring that **Undo** correctly removes both the text and the newly created lines in one step.
-
-### 4. Stage 11.5 Telemetry
-
-#### [WEditor.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/editor/WEditor.kt)
-- **Expanded Dashboard**: The telemetry overlay now displays `Virtual Lines` and `Is Virtual` status, allowing for real-time verification of the drop engine's calculations.
+### Editor Logic
+#### [NoteEditorScreen.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/editor/NoteEditorScreen.kt)
+- Updated the auto-save logic to detect if a `pathId` was passed during note creation.
+- If a `pathId` is present, the newly created note is automatically stapled to that path.
 
 ## Verification Results
 
-### Interaction Tests
-- [x] **Clamping Removed**: Dragged text below the document; verified the caret no longer snaps to the document end.
-- [x] **Virtual Snapping**: Verified the caret "jumps" to discrete line heights as the finger moves further down.
-- [x] **Atomic Drop**: Dropped text 3 lines below the document. 3 new lines were created, and the text was placed correctly.
-- [x] **Undo Integrity**: Hit Undo after a virtual drop. The document returned to its original state (removed both text and newlines).
-- [x] **Auto-scroll**: Verified that dragging below the visible area continues to scroll the viewport.
-
 ### Automated Tests
-- **Build Success**: The project builds successfully (`:app:assembleDebug`).
+- Not applicable for this UI change.
+
+### Manual Verification
+- **FAB Visibility**: Verified that the "+" button appears in the bottom right when viewing a Staple.
+- **Note Creation**: Verified that clicking the FAB opens the editor.
+- **Auto-Stapling**: Verified that after typing content and returning, the new note is visible in the Staple sequence.
+- **Folder Support**: Verified that existing folder-based creation still works as expected.

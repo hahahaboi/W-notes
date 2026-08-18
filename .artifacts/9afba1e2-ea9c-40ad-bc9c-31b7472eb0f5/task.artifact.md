@@ -1,0 +1,4 @@
+- [x] Refine `UncategorizedFilter` labels in `NoteViewModel.kt`
+- [x] Add vertical padding to filter scrollbar in `NoteWorkspaceScreen.kt`
+- [x] Clear note selection when switching filters in `NoteWorkspaceScreen.kt`
+- [x] Final verification

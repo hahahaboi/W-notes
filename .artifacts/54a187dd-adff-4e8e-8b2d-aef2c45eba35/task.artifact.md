@@ -1,0 +1,5 @@
+- [x] Update `AllNotesScreen.kt`
+- [x] Update `UncategorizedNotesScreen.kt`
+- [x] Update `PathDetailScreen.kt`
+- [x] Update `NavGraph.kt`
+- [x] Verify build and errors

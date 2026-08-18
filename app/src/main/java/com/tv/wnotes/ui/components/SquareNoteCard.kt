@@ -2,11 +2,13 @@ package com.tv.wnotes.ui.components
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,22 +51,23 @@ fun SquareNoteCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (note.isStarred) {
-                    Text(
-                        text = "★",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary
+                    Icon(
+                        imageVector = Icons.Outlined.Star,
+                        contentDescription = "Starred",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary
                     )
                 }
             }
 
             if (note.isPinned) {
                 Spacer(modifier = Modifier.height(4.dp))
-                InfoPill(label = "📌 Pinned")
+                InfoPill(label = "Pinned", icon = Icons.Outlined.PushPin)
             }
             
             if (note.isRough) {
                 Spacer(modifier = Modifier.height(4.dp))
-                InfoPill(label = "🟠 Rough")
+                InfoPill(label = "Rough", icon = Icons.Outlined.EditNote)
             }
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -95,10 +98,10 @@ fun SquareNoteCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 folderName?.let {
-                    InfoPill(label = "📁 $it")
+                    InfoPill(label = it, icon = Icons.Outlined.Folder)
                 }
                 linkPathName?.let {
-                    InfoPill(label = "📎 $it")
+                    InfoPill(label = it, icon = Icons.Outlined.Link)
                 }
             }
         }
@@ -106,18 +109,31 @@ fun SquareNoteCard(
 }
 
 @Composable
-private fun InfoPill(label: String) {
+private fun InfoPill(label: String, icon: ImageVector? = null) {
     Surface(
         shape = RoundedCornerShape(999.dp),
         color = MaterialTheme.colorScheme.surfaceVariant
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-        )
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            icon?.let {
+                Icon(
+                    imageVector = it,
+                    contentDescription = null,
+                    modifier = Modifier.size(12.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 

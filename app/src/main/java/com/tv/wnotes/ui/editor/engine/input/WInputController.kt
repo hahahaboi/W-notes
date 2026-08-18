@@ -3,7 +3,6 @@ package com.tv.wnotes.ui.editor.engine.input
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import com.tv.wnotes.ui.editor.engine.clipboard.WClipboardManager
-import com.tv.wnotes.ui.editor.engine.logic.WContentManager
 import com.tv.wnotes.ui.editor.engine.logic.WHistoryManager
 import com.tv.wnotes.ui.editor.engine.logic.WLayoutProvider
 import com.tv.wnotes.ui.editor.engine.logic.WMutationEngine
@@ -20,7 +19,7 @@ import com.tv.wnotes.ui.editor.engine.state.*
 class WInputController(
     private val editorState: WEditorState,
     private val historyManager: WHistoryManager,
-    private val clipboardManager: WClipboardManager
+    private val clipboardManager: WClipboardManager,
 ) {
     private var isBatchEditing = false
 
@@ -106,15 +105,6 @@ class WInputController(
         }
     }
 
-    fun createInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT or 
-                             android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-                             android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-        outAttrs.imeOptions = EditorInfo.IME_ACTION_DONE
-        
-        return WInputConnection(this, editorState)
-    }
-
     /**
      * Translates IME enter into a semantic operation.
      */
@@ -160,7 +150,7 @@ class WInputController(
                     } else current
                 }
             }
-            com.tv.wnotes.ui.editor.engine.logic.NavigationDirection.UP, 
+            com.tv.wnotes.ui.editor.engine.logic.NavigationDirection.UP,
             com.tv.wnotes.ui.editor.engine.logic.NavigationDirection.DOWN -> {
                 (layoutProvider as? com.tv.wnotes.ui.editor.engine.renderer.WLayoutState)?.getNextPosition(current, direction) ?: current
             }

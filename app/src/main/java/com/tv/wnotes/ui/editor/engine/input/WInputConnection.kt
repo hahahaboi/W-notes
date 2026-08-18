@@ -12,6 +12,7 @@ import com.tv.wnotes.ui.editor.engine.state.WOperation
 import com.tv.wnotes.ui.editor.engine.state.WSelectionPoint
 import com.tv.wnotes.ui.editor.engine.logic.WSelectionManager
 import com.tv.wnotes.ui.editor.engine.logic.WSpanManager
+import com.tv.wnotes.ui.editor.engine.logic.WAnnotationManager
 
 /**
  * Custom InputConnection for WEditor.
@@ -50,7 +51,9 @@ class WInputConnection(
             oldSpans = block.spans,
             newSpans = WSpanManager.shiftSpansForDeletion(block.spans, start, end),
             beforeCursor = cursor,
-            afterCursor = cursor.copy(offset = start)
+            afterCursor = cursor.copy(offset = start),
+            beforeAnnotations = snapshot.annotations,
+            afterAnnotations = WAnnotationManager.shiftAnnotationsForDeletion(snapshot.annotations, cursor.blockId, start, end)
         )
         
         controller.onOperation(operation)

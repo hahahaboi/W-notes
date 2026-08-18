@@ -9,15 +9,22 @@ import com.tv.wnotes.ui.editor.engine.logic.CursorAffinity
 @Immutable
 data class WSelectionState(
     val ranges: List<WSelectionRange> = emptyList(),
+    val activeRangeId: String? = null,
+    val interactionMode: WSelectionInteraction = WSelectionInteraction.NORMAL,
     val isActive: Boolean = false,
-    val mode: WSelectionMode = WSelectionMode.NONE,
+    val depth: WSelectionDepth = WSelectionDepth.NONE,
     val composingRange: WSelectionRange? = null,
     val startHandle: WSelectionHandleState = WSelectionHandleState(WSelectionHandleType.START),
     val endHandle: WSelectionHandleState = WSelectionHandleState(WSelectionHandleType.END),
     val activeHandle: WSelectionHandleType? = null
 )
 
-enum class WSelectionMode {
+enum class WSelectionInteraction {
+    NORMAL,
+    ADD_RANGE
+}
+
+enum class WSelectionDepth {
     NONE,
     CHARACTER,
     WORD,
@@ -27,7 +34,8 @@ enum class WSelectionMode {
 @Immutable
 data class WSelectionRange(
     val anchor: WSelectionPoint,
-    val focus: WSelectionPoint
+    val focus: WSelectionPoint,
+    val id: String = java.util.UUID.randomUUID().toString()
 )
 
 @Immutable
@@ -105,7 +113,7 @@ data class WTelemetryState(
 @Immutable
 data class WDragState(
     val phase: WDragPhase = WDragPhase.IDLE,
-    val selectedRange: WSelectionRange? = null,
+    val selectedRanges: List<WSelectionRange> = emptyList(),
     val fingerPosition: Offset = Offset.Unspecified,
     val liftProgress: Float = 0f,
     val previewOffset: Offset = Offset.Zero,

@@ -1,0 +1,5 @@
+- [x] Create `Shape.kt` with `ActionMenuShape`
+- [x] Apply `ActionMenuShape` to `HomeScreen.kt`
+- [x] Apply `ActionMenuShape` to `NoteWorkspaceScreen.kt`
+- [x] Apply `ActionMenuShape` to `NoteEditorScreen.kt`
+- [x] Verify build and consistency

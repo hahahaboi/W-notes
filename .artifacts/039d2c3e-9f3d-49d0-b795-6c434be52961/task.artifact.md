@@ -1,0 +1,5 @@
+- [x] Fix double digit input bug in `WEditorInputLayer.kt`
+    - [x] Update `handleHardwareKey` to consume numeric keys and update duplicate prevention state
+    - [x] Refine `onValueChange` logic for better state synchronization
+- [x] Verify fix by manual inspection and (if possible) adding a test
+- [x] Final verification of editor functionality

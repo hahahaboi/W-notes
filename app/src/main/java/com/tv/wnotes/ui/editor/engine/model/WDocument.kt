@@ -1,6 +1,7 @@
 package com.tv.wnotes.ui.editor.engine.model
 
 import androidx.compose.runtime.Immutable
+import com.tv.wnotes.data.local.entity.ContextAnnotation
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 

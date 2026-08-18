@@ -13,6 +13,7 @@ data class Note(
     val isStarred: Boolean = false,
     val isPinned: Boolean = false,
     val isDeleted: Boolean = false,
+    val isLocked: Boolean = false,
     val isRough: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),

@@ -23,14 +23,14 @@ class WDragManager(
     /**
      * Transition: IDLE -> PREPARING_LIFT
      */
-    fun prepareLift(range: WSelectionRange, position: Offset, snapshot: WEditorSnapshot) {
+    fun prepareLift(ranges: List<WSelectionRange>, position: Offset, snapshot: WEditorSnapshot) {
         println("DROP STAGE 1: Drag Started")
         onTelemetry { it.copy(dragPhase = WDragPhase.PREPARING_LIFT, pointerPosition = position) }
-        println("STAGE 5: prepareLift() for range $range at $position")
-        val preview = WDragPreviewManager.buildPreview(snapshot, layoutProvider, position)
+        println("STAGE 5: prepareLift() for ranges $ranges at $position")
+        val preview = WDragPreviewManager.buildPreview(snapshot, layoutProvider, position, ranges)
         _state.value = WDragState(
             phase = WDragPhase.PREPARING_LIFT,
-            selectedRange = range,
+            selectedRanges = ranges,
             fingerPosition = position,
             liftProgress = 0f,
             preview = preview
@@ -129,12 +129,12 @@ class WDragManager(
     fun endDrag(targetPoint: WSelectionPoint?) {
         println("DROP STAGE 8: Drop Released")
         onTelemetry { it.copy(currentStage = 7, dragPhase = WDragPhase.DROPPED) }
-        val range = state.selectedRange
+        val ranges = state.selectedRanges
         val virtualLines = state.insertionCaret.virtualLineCount
         
-        if (state.phase == WDragPhase.DRAGGING && range != null && targetPoint != null && state.insertionCaret.isValidTarget) {
+        if (state.phase == WDragPhase.DRAGGING && ranges.isNotEmpty() && targetPoint != null && state.insertionCaret.isValidTarget) {
             _state.value = state.copy(phase = WDragPhase.DROPPED)
-            onEvent(WDragEvent.DropExecuted(range, targetPoint, virtualLines))
+            onEvent(WDragEvent.DropExecuted(ranges, targetPoint, virtualLines))
         } else {
             cancel()
         }

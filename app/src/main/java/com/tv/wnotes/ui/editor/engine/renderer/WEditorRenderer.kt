@@ -5,9 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.tv.wnotes.ui.editor.engine.logic.WDragInternalState
 import com.tv.wnotes.ui.editor.engine.state.WEditorSnapshot
 import com.tv.wnotes.ui.editor.engine.state.WDragPhase
+import com.tv.wnotes.ui.editor.editorGestures
 import kotlinx.coroutines.flow.collectLatest
 
 /**
@@ -42,9 +41,16 @@ fun WEditorRenderer(
     editorCoordinates: LayoutCoordinates?,
     animController: WDragAnimationController,
     cursorBlinkVisible: Boolean,
+    scrollState: androidx.compose.foundation.ScrollState,
+    title: String,
+    onTitleChange: (String) -> Unit,
+    gestureCoordinator: com.tv.wnotes.ui.editor.engine.logic.WGestureCoordinator,
+    focusRequester: androidx.compose.ui.focus.FocusRequester,
+    onGestureDetected: (String) -> Unit,
+    onCaretRendered: () -> Unit = {},
+    onContentPositioned: (Offset) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val scrollState = rememberScrollState()
     
     // Auto-scrolling logic
     val density = LocalDensity.current
@@ -76,41 +82,156 @@ fun WEditorRenderer(
         }
     }
 
+    // Cursor Auto-Scrolling logic
+    LaunchedEffect(snapshot.cursor.position, snapshot.document.revision, editorSize) {
+        if (editorSize.height <= 0 || snapshot.drag.phase != WDragPhase.IDLE) return@LaunchedEffect
+        
+        // Wait a frame for layout results to catch up if document changed
+        kotlinx.coroutines.yield()
+        
+        val cursorRect = layoutState.getInsertionBeamForPoint(snapshot.cursor.position) ?: return@LaunchedEffect
+        val viewportHeight = editorSize.height.toFloat()
+        val margin = with(density) { 56.dp.toPx() } // Enough space to see the next/prev line
+        
+        val cursorTop = cursorRect.top
+        val cursorBottom = cursorRect.bottom
+        
+        if (cursorTop < margin) {
+            // Cursor is near or above the top - Scroll Up
+            val scrollDelta = cursorTop - margin
+            scrollState.animateScrollTo(
+                value = (scrollState.value + scrollDelta).toInt().coerceAtLeast(0),
+                animationSpec = androidx.compose.animation.core.tween(durationMillis = 150)
+            )
+        } else if (cursorBottom > viewportHeight - margin) {
+            // Cursor is near or below the bottom - Scroll Down
+            val scrollDelta = cursorBottom - (viewportHeight - margin)
+            scrollState.animateScrollTo(
+                value = (scrollState.value + scrollDelta).toInt().coerceAtMost(scrollState.maxValue),
+                animationSpec = androidx.compose.animation.core.tween(durationMillis = 150)
+            )
+        }
+    }
+
     val currentPlaceholderAlpha by animController.placeholderAlpha.asState()
+    var contentRelativeOffset by remember { mutableStateOf(Offset.Zero) }
 
     Box(modifier = modifier.onGloballyPositioned { editorSize = it.size }) {
+        var documentCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
                 .padding(16.dp)
         ) {
-            snapshot.document.blocks.forEach { block ->
-                key(block.id) {
-                    WBlockRenderer(
-                        block = block,
-                        snapshot = snapshot,
-                        onTextLayout = { layoutState.layoutResults[block.id] = it },
-                        modifier = Modifier.onGloballyPositioned { coords ->
-                            editorCoordinates?.let { root ->
-                                // Calculate position relative to the editor root Box
-                                val pos = root.localPositionOf(coords, Offset.Zero)
-                                layoutState.blockOffsets[block.id] = pos
-                                layoutState.blockHeights[block.id] = coords.size.height.toFloat()
-                            }
-                        },
-                        placeholderAlpha = currentPlaceholderAlpha
+            TextField(
+                value = title,
+                onValueChange = onTitleChange,
+                placeholder = { Text("Title", style = MaterialTheme.typography.headlineMedium) },
+                modifier = Modifier
+                    .fillMaxWidth(),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent
+                ),
+                textStyle = MaterialTheme.typography.headlineMedium
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onGloballyPositioned { 
+                        documentCoordinates = it
+                        editorCoordinates?.let { root ->
+                            val localPos = root.localPositionOf(it, Offset.Zero)
+                            contentRelativeOffset = localPos
+                            onContentPositioned(localPos)
+                        }
+                    }
+                    .editorGestures(
+                        coordinator = gestureCoordinator,
+                        selectionState = snapshot.selection,
+                        dragPhase = snapshot.drag.phase,
+                        focusRequester = focusRequester,
+                        density = density.density,
+                        onGestureDetected = onGestureDetected
                     )
+            ) {
+                Column {
+                    snapshot.document.blocks.forEach { block ->
+                        key(block.id) {
+                            WBlockRenderer(
+                                block = block,
+                                snapshot = snapshot,
+                                layoutState = layoutState,
+                                documentCoordinates = documentCoordinates,
+                                onTextLayout = { layoutState.layoutResults[block.id] = it },
+                                onCommand = { gestureCoordinator.onCommand(it) },
+                                placeholderAlpha = currentPlaceholderAlpha
+                            )
+                        }
+                    }
                 }
             }
+
+            // Infinite Scrolling Spacer
+            Spacer(modifier = Modifier.height(LocalConfiguration.current.screenHeightDp.dp))
+
+            // Real-time word count in editor - MEMOIZED & OPTIMIZED
+            val words by remember(snapshot.document.revision) {
+                derivedStateOf {
+                    var total = 0
+                    snapshot.document.blocks.forEach { block ->
+                        if (block is com.tv.wnotes.ui.editor.engine.model.WTextContainer) {
+                            val text = block.text
+                            if (text.isNotBlank()) {
+                                total += text.trim().split(Regex("\\s+")).size
+                            }
+                        }
+                    }
+                    total
+                }
+            }
+            Text(
+                text = "$words words",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.align(Alignment.End).padding(top = 8.dp)
+            )
         }
 
         // Overlay for Cursors and Selection Highlights
         EditorOverlayLayer(
             snapshot = snapshot,
             layoutState = layoutState,
-            cursorBlinkVisible = cursorBlinkVisible
+            cursorBlinkVisible = cursorBlinkVisible,
+            contentRelativeOffset = { contentRelativeOffset }
         )
+
+        // Selection Handles - Also moved here for perfect sync and low latency
+        if (snapshot.drag.phase == WDragPhase.IDLE) {
+            WSelectionHandleRenderer(
+                selectionState = snapshot.selection,
+                contentRelativeOffset = { contentRelativeOffset },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        // Insertion Caret
+        if (snapshot.drag.phase != WDragPhase.IDLE) {
+            WInsertionCaretRenderer(
+                caretState = snapshot.drag.insertionCaret,
+                onRendered = onCaretRendered,
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    translationX = contentRelativeOffset.x
+                    translationY = contentRelativeOffset.y
+                }
+            )
+        }
     }
 }
 
@@ -118,29 +239,42 @@ fun WEditorRenderer(
 private fun EditorOverlayLayer(
     snapshot: WEditorSnapshot,
     layoutState: WLayoutState,
-    cursorBlinkVisible: Boolean
+    cursorBlinkVisible: Boolean,
+    contentRelativeOffset: () -> Offset
 ) {
     val selectionColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
     val cursorColor = MaterialTheme.colorScheme.primary
+    
+    // MEMOIZE normalized selections to avoid O(N*M) calculation during Draw phase
+    val normalizedRanges = remember(snapshot.selection.ranges, snapshot.document.blocks) {
+        snapshot.selection.ranges.map { com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(it, snapshot.document.blocks) }
+    }
 
-    Canvas(modifier = Modifier.fillMaxSize()) {
+    Canvas(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                val offset = contentRelativeOffset()
+                translationX = offset.x
+                translationY = offset.y
+            }
+    ) {
         val layoutResults = layoutState.layoutResults
         val blockOffsets = layoutState.blockOffsets
 
         // 1. Draw Selection Highlights
         if (snapshot.selection.isActive) {
-            snapshot.selection.ranges.forEach { range ->
-                val normalized = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(range, snapshot.document.blocks)
-                
-                snapshot.document.blocks.forEach { block ->
+            val blocks = snapshot.document.blocks
+            normalizedRanges.forEach { normalized ->
+                blocks.forEach { block ->
                     val layout = layoutResults[block.id] ?: return@forEach
                     val offset = blockOffsets[block.id] ?: Offset.Zero
                     
-                    val startIdx = snapshot.document.blocks.indexOfFirst { it.id == normalized.anchor.blockId }
-                    val endIdx = snapshot.document.blocks.indexOfFirst { it.id == normalized.focus.blockId }
-                    val currentIdx = snapshot.document.blocks.indexOfFirst { it.id == block.id }
+                    val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+                    val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+                    val currentIdx = blocks.indexOfFirst { it.id == block.id }
 
-                    if (currentIdx in startIdx..endIdx) {
+                    if (currentIdx in startIdx..endIdx && startIdx != -1 && endIdx != -1) {
                         val selectionStart = if (currentIdx == startIdx) normalized.anchor.offset else 0
                         val selectionEnd = if (currentIdx == endIdx) normalized.focus.offset else {
                             if (block is com.tv.wnotes.ui.editor.engine.model.WTextBlock) block.text.length 

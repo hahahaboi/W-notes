@@ -20,6 +20,15 @@ class WGestureCoordinator(
     var lastHitResult: WHitResult? = null
         private set
 
+    fun isPotentialMultiTap(offset: Offset): Boolean {
+        val now = System.currentTimeMillis()
+        val prevPosition = lastTapPosition
+        val isSpatiallyClose = if (prevPosition != null) {
+            (offset - prevPosition).getDistance() < MULTI_TAP_SLOP
+        } else false
+        return (now - lastTapTime < MULTI_TAP_TIMEOUT && isSpatiallyClose)
+    }
+
     fun onCommand(command: WEditorCommand) {
         onCommand.invoke(command)
     }
@@ -59,11 +68,45 @@ class WGestureCoordinator(
             return
         }
 
+        if (hit.isBelowDocument) {
+            onCommand(WEditorCommand.TapBelowDocument(offset))
+            return
+        }
+
+        // Check if we hit an existing selection (Stage XX)
+        val selectionUnderPoint = layoutProvider.hitTest(offset)?.let { 
+            WSelectionManager.selectionAtPosition(
+                state = layoutProvider.currentSelection ?: WSelectionState(), 
+                blockId = it.blockId, 
+                offset = it.characterIndex, 
+                blocks = layoutProvider.currentBlocks
+            )
+        }
+
+        if (selectionUnderPoint != null) {
+            onCommand(WEditorCommand.ActivateSelection(selectionUnderPoint.id))
+            return
+        }
+
         val point = WSelectionPoint(hit.blockId, hit.characterIndex)
+        val isAddMode = (layoutProvider.currentSelection?.interactionMode == WSelectionInteraction.ADD_RANGE)
+
+        // Check for annotations on single tap
+        if (tapCount == 1 && !isShiftPressed && !isAddMode) {
+            val annotation = WAnnotationManager.getAnnotationAtPoint(
+                layoutProvider.currentAnnotations,
+                hit.blockId,
+                hit.characterIndex
+            )
+            if (annotation != null) {
+                onCommand(WEditorCommand.ShowAnnotation(annotation.id))
+                return
+            }
+        }
 
         when {
             isShiftPressed -> onCommand(WEditorCommand.ExtendSelection(point))
-            tapCount == 2 -> onCommand(WEditorCommand.SelectWord(point))
+            tapCount == 2 || isAddMode -> onCommand(WEditorCommand.SelectWord(point))
             tapCount == 3 -> onCommand(WEditorCommand.SelectParagraph(point))
             else -> onCommand(WEditorCommand.MoveCursor(point, hit.affinity))
         }
@@ -109,15 +152,28 @@ class WGestureCoordinator(
     }
 
     /**
-     * Handles drag start. Checks for handles first.
+     * Handles dragging to extend selection (e.g. after long press).
      */
-    fun onDragStart(offset: Offset, selectionState: WSelectionState, density: Float) {
+    fun onSelectionDrag(offset: Offset) {
+        val point = layoutProvider.getSelectionPointForOffset(offset) ?: return
+        onCommand(WEditorCommand.ExtendSelection(point))
+    }
+
+    /**
+     * Handles drag start. Checks for handles first.
+     * Returns true if it handled a handle or started a selection drag (e.g. double-tap-drag).
+     */
+    fun onDragStart(offset: Offset, selectionState: WSelectionState, density: Float): Boolean {
         val hitHandle = WSelectionHandleManager.hitTestHandles(offset, selectionState, density)
         if (hitHandle != null) {
             onCommand(WEditorCommand.UpdateActiveHandle(hitHandle))
-        } else {
-            // Future milestones: start regular drag or selection extension
+            return true
+        } else if (isPotentialMultiTap(offset)) {
+            // Double-tap and drag: Select the word then allow extending it.
+            onDoubleTap(offset)
+            return true
         }
+        return false
     }
 
     /**

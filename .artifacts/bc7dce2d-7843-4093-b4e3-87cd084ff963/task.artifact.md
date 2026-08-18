@@ -1,0 +1,3 @@
+- [x] Update `WAnimatedIcon.kt` to use two slanted lines for `progress = 0`
+- [x] Verify changes in Preview
+- [x] Deploy and verify on device

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -83,10 +84,13 @@ fun SwipeSelectableNoteCard(
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.alpha((offsetX / 150f).coerceIn(0f, 1f))
             )
-            Text(
-                text = "🗑",
-                fontSize = 24.sp,
-                modifier = Modifier.alpha((-offsetX / 150f).coerceIn(0f, 1f))
+            Icon(
+                imageVector = Icons.Outlined.Delete,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier
+                    .size(28.dp)
+                    .alpha((-offsetX / 150f).coerceIn(0f, 1f))
             )
         }
 

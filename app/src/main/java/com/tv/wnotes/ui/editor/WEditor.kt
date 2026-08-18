@@ -6,6 +6,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -24,10 +25,13 @@ import androidx.compose.ui.focus.FocusRequester
 @Composable
 fun WEditor(
     host: WEditorHost,
+    title: String,
+    onTitleChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val snapshot by host.snapshot
     val layoutState = remember { WLayoutState() }
+    val scrollState = androidx.compose.foundation.rememberScrollState()
     val scope = rememberCoroutineScope()
     val animController = remember { WDragAnimationController(scope) }
     val focusRequester = remember { FocusRequester() }
@@ -40,7 +44,8 @@ fun WEditor(
     
     var gestureText by remember { mutableStateOf("Gesture: IDLE") }
     var editorCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    var isInputLayerPlaced by remember { mutableStateOf(false) }
+    var contentRelativeOffset by remember { mutableStateOf(Offset.Zero) }
+    var isInputLayerPlaced by remember { mutableStateOf(value = false) }
     
     // Toggle this to show/hide the telemetry overlay for debugging
     val showTelemetry = false
@@ -48,7 +53,7 @@ fun WEditor(
     // Auto-focus when the input layer is actually placed in the layout.
     // This avoids "BringIntoViewRequester to not be used before parents are placed" crash.
     LaunchedEffect(isInputLayerPlaced, editorCoordinates) {
-        if (isInputLayerPlaced && editorCoordinates != null) {
+        if ((isInputLayerPlaced) && (editorCoordinates != null)) {
             // Wait for at least one frame to ensure the placement is committed.
             kotlinx.coroutines.yield()
             try {
@@ -70,10 +75,6 @@ fun WEditor(
     val selection = snapshot.selection
     val drag = snapshot.drag
 
-    // Sync layout state immediately for hit-testing accuracy
-    layoutState.currentSelection = selection
-    layoutState.currentBlocks = snapshot.document.blocks
-
     // Sync animation controller with drag phase changes
     LaunchedEffect(drag.phase) {
         val internalState = when(drag.phase) {
@@ -85,6 +86,16 @@ fun WEditor(
             WDragPhase.CANCELLED -> WDragInternalState.Cancelled
         }
         animController.onDragStateChanged(internalState)
+    }
+
+    val currentDensity = androidx.compose.ui.platform.LocalDensity.current.density
+
+    // Sync state for hit-testing accuracy - Use SideEffect to avoid lag in touch processing
+    SideEffect {
+        layoutState.currentSelection = selection
+        layoutState.currentBlocks = snapshot.document.blocks
+        layoutState.currentAnnotations = snapshot.annotations
+        layoutState.density = currentDensity
     }
 
     // Update drag position in anim controller
@@ -101,6 +112,15 @@ fun WEditor(
             println("STAGE 14: Landing animation started towards $targetPos")
             animController.animateDrop(targetPos)
             host.gestureCoordinator.onCommand(WEditorCommand.CompleteDropCleanup)
+        }
+    }
+
+    // Sync physical handle positions with layout - DOCUMENT LOCAL
+    // We remove scrollState.value to avoid expensive ViewModel updates during scroll
+    LaunchedEffect(selection, editorCoordinates, snapshot.document.revision) {
+        if (selection.isActive) {
+            val (start, end) = com.tv.wnotes.ui.editor.engine.logic.WSelectionHandleManager.calculateHandlePositions(snapshot, layoutState)
+            host.engineState.updateHandlePositions(start, end)
         }
     }
 
@@ -139,27 +159,34 @@ fun WEditor(
                 editorCoordinates = editorCoordinates,
                 animController = animController,
                 cursorBlinkVisible = cursorBlinkVisible,
-                modifier = Modifier.fillMaxSize()
-            )
-
-            // 2. Interaction Overlay (Caret, Handles)
-            WEditorOverlay(
-                snapshot = snapshot,
-                animController = animController,
+                scrollState = scrollState,
+                title = title,
+                onTitleChange = onTitleChange,
+                gestureCoordinator = host.gestureCoordinator,
+                focusRequester = focusRequester,
+                onGestureDetected = { gestureText = it },
                 onCaretRendered = {
                     host.engineState.updateTelemetry { it.copy(currentStage = 6, dropCaretVisible = true) }
                 },
+                onContentPositioned = { contentRelativeOffset = it },
                 modifier = Modifier.fillMaxSize()
             )
 
-            // 4. Gesture Layer (Pointer Ownership) - TOPMOST
-            WEditorGestureLayer(
-                coordinator = host.gestureCoordinator,
-                selectionState = selection,
-                dragPhase = drag.phase,
-                focusRequester = focusRequester,
-                onGestureDetected = { gestureText = it },
+            // 2. Interaction Overlay (Drag Preview, Multi-Selection Toolbar)
+            // Stays on top to allow toolbar clicks
+            WEditorOverlay(
+                snapshot = snapshot,
+                layoutState = layoutState,
+                animController = animController,
+                onCommand = { host.gestureCoordinator.onCommand(it) },
+                contentRelativeOffset = { contentRelativeOffset },
                 modifier = Modifier.fillMaxSize()
+            )
+
+            // 5. Scrollbar Layer - TOPMOST
+            com.tv.wnotes.ui.components.WScrollbar(
+                scrollState = scrollState,
+                modifier = Modifier.align(Alignment.CenterEnd)
             )
         }
 

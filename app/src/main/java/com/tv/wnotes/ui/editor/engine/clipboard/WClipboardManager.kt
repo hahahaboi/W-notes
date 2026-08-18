@@ -94,36 +94,45 @@ class WClipboardManager(
     }
 
     private fun extractSelection(snapshot: WEditorSnapshot): WClipboardContent? {
-        if (snapshot.selection.ranges.isEmpty()) return null
-        val range = WSelectionManager.normalize(snapshot.selection.ranges.first(), snapshot.document.blocks)
+        if (!snapshot.selection.isActive || snapshot.selection.ranges.isEmpty()) return null
+        
         val blocks = snapshot.document.blocks
-        
-        val startIdx = blocks.indexOfFirst { it.id == range.anchor.blockId }
-        val endIdx = blocks.indexOfFirst { it.id == range.focus.blockId }
-        
-        if (startIdx == -1 || endIdx == -1) return null
-        
         val extractedBlocks = mutableListOf<WBlock>()
         val plainTextBuilder = StringBuilder()
 
-        for (i in startIdx..endIdx) {
-            val block = blocks[i]
-            if (block !is WTextContainer) continue
-            
-            val start = if (i == startIdx) range.anchor.offset else 0
-            val end = if (i == endIdx) range.focus.offset else block.text.length
-            
-            val sliceText = block.text.substring(start, end)
-            val sliceSpans = block.spans.filter { it.start < end && it.end > start }
-                .map { it.copy(
-                    start = (it.start - start).coerceAtLeast(0),
-                    end = (it.end - start).coerceAtMost(sliceText.length)
-                ) }
+        // Document Order Processing (Stage XX)
+        val sortedRanges = WSelectionManager.normalizeSelectionOrder(snapshot.selection.ranges, blocks)
 
-            val slicedBlock = block.copyWithText(sliceText, sliceSpans)
-            extractedBlocks.add(slicedBlock)
-            plainTextBuilder.append(sliceText)
-            if (i < endIdx) plainTextBuilder.append("\n")
+        sortedRanges.forEachIndexed { rangeIndex, rawRange ->
+            val range = WSelectionManager.normalize(rawRange, blocks)
+            val startIdx = blocks.indexOfFirst { it.id == range.anchor.blockId }
+            val endIdx = blocks.indexOfFirst { it.id == range.focus.blockId }
+            
+            if (startIdx == -1 || endIdx == -1) return@forEachIndexed
+
+            for (i in startIdx..endIdx) {
+                val block = blocks[i]
+                if (block !is WTextContainer) continue
+                
+                val start = if (i == startIdx) range.anchor.offset else 0
+                val end = if (i == endIdx) range.focus.offset else block.text.length
+                
+                val sliceText = block.text.substring(start, end)
+                val sliceSpans = block.spans.filter { it.start < end && it.end > start }
+                    .map { it.copy(
+                        start = (it.start - start).coerceAtLeast(0),
+                        end = (it.end - start).coerceAtMost(sliceText.length)
+                    ) }
+
+                val slicedBlock = block.copyWithText(sliceText, sliceSpans)
+                extractedBlocks.add(slicedBlock)
+                plainTextBuilder.append(sliceText)
+                if (i < endIdx) plainTextBuilder.append("\n")
+            }
+            
+            if (rangeIndex < sortedRanges.size - 1) {
+                plainTextBuilder.append("\n---\n") // Separator for non-contiguous selections
+            }
         }
 
         return WClipboardContent(

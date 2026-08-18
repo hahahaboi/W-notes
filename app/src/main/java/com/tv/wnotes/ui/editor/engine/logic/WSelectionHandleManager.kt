@@ -23,7 +23,9 @@ object WSelectionHandleManager {
             return Offset.Unspecified to Offset.Unspecified
         }
 
-        val range = WSelectionManager.normalize(snapshot.selection.ranges.first(), snapshot.document.blocks)
+        val rangeId = snapshot.selection.activeRangeId ?: snapshot.selection.ranges.first().id
+        val activeRange = snapshot.selection.ranges.find { it.id == rangeId } ?: snapshot.selection.ranges.first()
+        val range = WSelectionManager.normalize(activeRange, snapshot.document.blocks)
         
         val startRect = layoutProvider.getInsertionBeamForPoint(range.anchor)
         val endRect = layoutProvider.getInsertionBeamForPoint(range.focus)

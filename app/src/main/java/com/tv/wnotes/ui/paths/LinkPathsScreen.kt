@@ -1,6 +1,10 @@
 package com.tv.wnotes.ui.paths
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -12,7 +16,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,16 +36,20 @@ import com.tv.wnotes.viewmodel.NoteViewModel
 fun LinkPathsScreen(
     viewModel: LinkPathViewModel,
     noteViewModel: NoteViewModel,
-    onBack: () -> Unit,
+    onBack: () -> Unit = {},
     onPathClick: (Long, String) -> Unit,
-    onOpenDrawer: () -> Unit
+    onOpenDrawer: () -> Unit,
+    drawerProgress: Float,
 ) {
     val paths by viewModel.allPaths.collectAsState()
-    var showAddDialog by remember { mutableStateOf(false) }
+    var showAddDialog by remember { mutableStateOf(value = false) }
     var newPathName by remember { mutableStateOf("") }
+    var showNewNoteInput by remember { mutableStateOf(false) }
+    var newNoteTitleForStaple by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
     var selectedPathIds by rememberSaveable { mutableStateOf(setOf<Long>()) }
     var contextMenuPathId by remember { mutableStateOf<Long?>(null) }
+    var showRenameStapleDialog by remember { mutableStateOf<LinkPath?>(null) }
 
     val filteredPaths = remember(paths, searchQuery) {
         if (searchQuery.isBlank()) paths
@@ -51,6 +58,8 @@ fun LinkPathsScreen(
     
     val allNotes by noteViewModel.allNotes.collectAsState() 
     val selectedNotes = remember { mutableStateListOf<Long>() }
+    val listState = rememberSaveable(saver = androidx.compose.foundation.lazy.LazyListState.Saver) { androidx.compose.foundation.lazy.LazyListState() }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -70,7 +79,11 @@ fun LinkPathsScreen(
                         if (selectedPathIds.isNotEmpty()) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         } else {
-                            Icon(Icons.Default.Menu, contentDescription = "Menu")
+                            com.tv.wnotes.ui.components.WAnimatedIcon(
+                                progress = drawerProgress,
+                                modifier = Modifier.size(24.dp),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
                         }
                     }
                 },
@@ -122,63 +135,92 @@ fun LinkPathsScreen(
                     Text(if (searchQuery.isEmpty()) "Nothing stapled yet" else "No matches found")
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    items(filteredPaths, key = { it.id }) { path ->
-                        val isSelected = path.id in selectedPathIds
-                        Box {
-                            PathPreviewBox(
-                                path = path,
-                                viewModel = viewModel,
-                                onClick = {
-                                    if (selectedPathIds.isNotEmpty()) {
-                                        selectedPathIds = if (isSelected) selectedPathIds - path.id else selectedPathIds + path.id
-                                    } else {
-                                        onPathClick(path.id, path.name)
-                                    }
-                                },
-                                onDoubleTap = {
-                                    if (selectedPathIds.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(filteredPaths, key = { it.id }) { path ->
+                            val isSelected = path.id in selectedPathIds
+                            Box {
+                                PathPreviewBox(
+                                    path = path,
+                                    viewModel = viewModel,
+                                    onClick = {
+                                        if (selectedPathIds.isNotEmpty()) {
+                                            selectedPathIds = if (isSelected) selectedPathIds - path.id else selectedPathIds + path.id
+                                        } else {
+                                            onPathClick(path.id, path.name)
+                                        }
+                                    },
+                                    onDoubleTap = {
+                                        if (selectedPathIds.isEmpty()) {
                                         selectedPathIds = selectedPathIds + path.id
-                                        contextMenuPathId = path.id
-                                    } else {
-                                        selectedPathIds = if (isSelected) selectedPathIds - path.id else selectedPathIds + path.id
-                                    }
-                                },
-                                containerColor = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
-                            )
+                                            contextMenuPathId = path.id
+                                        } else {
+                                            selectedPathIds = if (isSelected) selectedPathIds - path.id else selectedPathIds + path.id
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (selectedPathIds.isEmpty()) {
+                                        selectedPathIds = selectedPathIds + path.id
+                                            contextMenuPathId = path.id
+                                        } else {
+                                            selectedPathIds = if (isSelected) selectedPathIds - path.id else selectedPathIds + path.id
+                                        }
+                                    },
+                                    containerColor = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
+                                )
 
-                            DropdownMenu(
-                                expanded = contextMenuPathId == path.id,
-                                onDismissRequest = { contextMenuPathId = null }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("Select") },
-                                    onClick = {
+                                DropdownMenu(
+                                    expanded = contextMenuPathId == path.id,
+                                    onDismissRequest = { contextMenuPathId = null }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Rename") },
+                                        onClick = {
+                                            showRenameStapleDialog = path
+                                            contextMenuPathId = null
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Select") },
+                                        onClick = {
                                         selectedPathIds = selectedPathIds + path.id
-                                        contextMenuPathId = null
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Delete") },
-                                    onClick = {
-                                        viewModel.deletePath(path)
-                                        contextMenuPathId = null
-                                    }
-                                )
+                                            contextMenuPathId = null
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Delete") },
+                                        onClick = {
+                                            viewModel.deletePath(path)
+                                            contextMenuPathId = null
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
+
+                    com.tv.wnotes.ui.components.WScrollbar(
+                        listState = listState,
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                    )
                 }
             }
         }
 
         if (showAddDialog) {
             AlertDialog(
-                onDismissRequest = { showAddDialog = false },
+                onDismissRequest = { 
+                    showAddDialog = false
+                    showNewNoteInput = false
+                    newNoteTitleForStaple = ""
+                    selectedNotes.clear()
+                    newPathName = ""
+                },
                 title = { Text("New Staple") },
                 text = {
                     Column {
@@ -189,9 +231,44 @@ fun LinkPathsScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text("Select Notes:", fontWeight = FontWeight.Bold)
+                        
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Select Notes:", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                            
+                            AnimatedVisibility(
+                                visible = showNewNoteInput,
+                                enter = expandHorizontally(),
+                                exit = shrinkHorizontally()
+                            ) {
+                                OutlinedTextField(
+                                    value = newNoteTitleForStaple,
+                                    onValueChange = { newNoteTitleForStaple = it },
+                                    placeholder = { Text("Note title") },
+                                    modifier = Modifier.width(150.dp).padding(end = 8.dp),
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            
+                            IconButton(
+                                onClick = { showNewNoteInput = !showNewNoteInput },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (showNewNoteInput) Icons.Default.Clear else Icons.Default.Add,
+                                    contentDescription = "Add new note",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        val dialogListState = androidx.compose.foundation.lazy.rememberLazyListState()
                         Box(modifier = Modifier.height(200.dp)) {
-                            LazyColumn {
+                            LazyColumn(state = dialogListState) {
                                 items(allNotes) { note ->
                                     Row(
                                         modifier = Modifier.fillMaxWidth().clickable {
@@ -208,24 +285,82 @@ fun LinkPathsScreen(
                                     }
                                 }
                             }
+                            com.tv.wnotes.ui.components.WScrollbar(
+                                listState = dialogListState,
+                                modifier = Modifier.align(Alignment.CenterEnd)
+                            )
                         }
                     }
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        if (newPathName.isNotBlank() && selectedNotes.isNotEmpty()) {
-                            val notesToLink = allNotes.filter { selectedNotes.contains(it.id) }
-                            viewModel.createStaple(newPathName, notesToLink)
-                            newPathName = ""
-                            selectedNotes.clear()
-                            showAddDialog = false
+                        if (newPathName.isNotBlank() && (selectedNotes.isNotEmpty() || newNoteTitleForStaple.isNotBlank())) {
+                            val notesToLinkIds = selectedNotes.toMutableList()
+                            
+                            if (newNoteTitleForStaple.isNotBlank()) {
+                                // We need to create the note first. 
+                                // Since createNoteAndReturnId is suspend, we wrap this in a coroutine scope.
+                                // NoteViewModel already has a launch in addNote, but here we need the ID.
+                                scope.launch {
+                                    val newNoteId = noteViewModel.createNoteAndReturnId(newNoteTitleForStaple, "")
+                                    notesToLinkIds.add(newNoteId)
+                                    viewModel.createStapleWithIds(newPathName, notesToLinkIds)
+                                    
+                                    newPathName = ""
+                                    selectedNotes.clear()
+                                    newNoteTitleForStaple = ""
+                                    showNewNoteInput = false
+                                    showAddDialog = false
+                                }
+                            } else {
+                                viewModel.createStapleWithIds(newPathName, notesToLinkIds)
+                                newPathName = ""
+                                selectedNotes.clear()
+                                showAddDialog = false
+                            }
                         }
                     }) {
                         Text("Create")
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showAddDialog = false }) {
+                    TextButton(onClick = { 
+                        showAddDialog = false
+                        showNewNoteInput = false
+                        newNoteTitleForStaple = ""
+                        selectedNotes.clear()
+                        newPathName = ""
+                    }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (showRenameStapleDialog != null) {
+            var value by remember { mutableStateOf(showRenameStapleDialog!!.name) }
+            AlertDialog(
+                onDismissRequest = { showRenameStapleDialog = null },
+                title = { Text("Rename Staple") },
+                text = {
+                    OutlinedTextField(
+                        value = value,
+                        onValueChange = { value = it },
+                        placeholder = { Text("Staple name") }
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        if (value.isNotBlank()) {
+                            viewModel.renameStaple(showRenameStapleDialog!!, value.trim())
+                            showRenameStapleDialog = null
+                        }
+                    }) {
+                        Text("Rename")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRenameStapleDialog = null }) {
                         Text("Cancel")
                     }
                 }

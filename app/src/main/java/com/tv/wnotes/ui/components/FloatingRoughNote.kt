@@ -47,7 +47,15 @@ fun FloatingRoughNote(
     val isCollapsed by viewModel.isCollapsed.collectAsState(initial = false)
     val dockedEdge by viewModel.dockedEdge.collectAsState(initial = null)
     
-    var offset by remember { mutableStateOf(Offset(screenWidth - 200f, screenHeight - 400f)) }
+    val currentSize = if (isCollapsed) 28.dp else 56.dp
+    val margin = 12.dp
+    
+    var offset by remember { 
+        mutableStateOf(Offset(
+            screenWidth - with(density) { (currentSize + margin).toPx() }, 
+            screenHeight - with(density) { 200.dp.toPx() }
+        )) 
+    }
     
     LaunchedEffect(savedX, savedY) {
         if (savedX != null && savedY != null) {
@@ -61,8 +69,8 @@ fun FloatingRoughNote(
     val animatedX by animateFloatAsState(
         targetValue = if (isCollapsed) {
             when (dockedEdge) {
-                "left" -> 0f
-                "right" -> screenWidth - with(density) { 16.dp.toPx() }
+                "left" -> with(density) { margin.toPx() }
+                "right" -> screenWidth - with(density) { (currentSize + margin).toPx() }
                 else -> offset.x
             }
         } else offset.x,
@@ -104,19 +112,27 @@ fun FloatingRoughNote(
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     // Drag handle / Header
+                    val pillWidthPx = with(density) { 300.dp.toPx() }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(24.dp)
-                            .pointerInput(Unit) {
-                                detectDragGestures { change, dragAmount ->
-                                    change.consume()
-                                    offset = Offset(
-                                        x = (offset.x + dragAmount.x).coerceIn(0f, screenWidth - 300f),
-                                        y = (offset.y + dragAmount.y).coerceIn(0f, screenHeight - 150f)
-                                    )
-                                    viewModel.savePosition(offset.x, offset.y)
-                                }
+                            .pointerInput(screenWidth, pillWidthPx) {
+                                detectDragGestures(
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        offset = Offset(
+                                            x = (offset.x + dragAmount.x).coerceIn(0f, screenWidth - pillWidthPx),
+                                            y = (offset.y + dragAmount.y).coerceIn(0f, screenHeight - with(density) { 200.dp.toPx() })
+                                        )
+                                    },
+                                    onDragEnd = {
+                                        viewModel.savePosition(offset.x, offset.y)
+                                    },
+                                    onDragCancel = {
+                                        viewModel.savePosition(offset.x, offset.y)
+                                    }
+                                )
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -144,12 +160,63 @@ fun FloatingRoughNote(
                 }
             }
         } else {
+            // Visual scale for press feedback
+            var isPressed by remember { mutableStateOf(false) }
+            val scale by animateFloatAsState(
+                targetValue = if (isPressed) 0.9f else 1f,
+                animationSpec = spring(),
+                label = "press_scale"
+            )
+
             Surface(
                 modifier = Modifier
                     .offset { IntOffset(animatedX.roundToInt(), offset.y.roundToInt()) }
-                    .size(if (isCollapsed) 16.dp else 64.dp)
-                    .pointerInput(Unit) {
+                    .size(currentSize)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                    }
+                    .pointerInput(isCollapsed, screenWidth, screenHeight) {
+                        detectDragGestures(
+                            onDragStart = { isPressed = true },
+                            onDragEnd = {
+                                isPressed = false
+                                // Snap to nearest edge
+                                val currentSizePx = with(density) { currentSize.toPx() }
+                                val snapX = if (offset.x < (screenWidth - currentSizePx) / 2) {
+                                    with(density) { margin.toPx() }
+                                } else {
+                                    screenWidth - with(density) { (currentSize + margin).toPx() }
+                                }
+                                
+                                offset = offset.copy(x = snapX)
+                                if (isCollapsed) {
+                                    val edge = if (offset.x < screenWidth / 2) "left" else "right"
+                                    viewModel.saveCollapsedState(true, edge)
+                                }
+                                viewModel.savePosition(offset.x, offset.y)
+                            },
+                            onDragCancel = { isPressed = false },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                val currentSizePx = with(density) { currentSize.toPx() }
+                                offset = Offset(
+                                    x = (offset.x + dragAmount.x).coerceIn(0f, screenWidth - currentSizePx),
+                                    y = (offset.y + dragAmount.y).coerceIn(0f, screenHeight - currentSizePx)
+                                )
+                            }
+                        )
+                    }
+                    .pointerInput(isCollapsed) {
                         detectTapGestures(
+                            onPress = {
+                                isPressed = true
+                                try {
+                                    awaitRelease()
+                                } finally {
+                                    isPressed = false
+                                }
+                            },
                             onTap = {
                                 if (isCollapsed) viewModel.saveCollapsedState(false)
                                 else isPillOpen = true
@@ -161,38 +228,33 @@ fun FloatingRoughNote(
                                 }
                             }
                         )
-                    }
-                    .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragEnd = {
-                                // Snap to nearest edge
-                                val snapX = if (offset.x < screenWidth / 2) 20f else screenWidth - 84f
-                                offset = offset.copy(x = snapX)
-                                viewModel.savePosition(offset.x, offset.y)
-                            }
-                        ) { change, dragAmount ->
-                            if (!isCollapsed) {
-                                change.consume()
-                                offset = Offset(
-                                    x = (offset.x + dragAmount.x).coerceIn(0f, screenWidth - 64f),
-                                    y = (offset.y + dragAmount.y).coerceIn(0f, screenHeight - 64f)
-                                )
-                                viewModel.savePosition(offset.x, offset.y)
-                            }
-                        }
                     },
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.primary,
+                color = if (isCollapsed) Color.Transparent else MaterialTheme.colorScheme.primary,
                 tonalElevation = 6.dp,
                 shadowElevation = 8.dp
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    if (!isCollapsed) {
+                    if (isCollapsed) {
+                        // Visual nub for collapsed state, but the Surface is hit area
+                        Box(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .background(MaterialTheme.colorScheme.primary, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(MaterialTheme.colorScheme.onPrimary, CircleShape)
+                            )
+                        }
+                    } else {
                         Text(
                             "R",
                             color = MaterialTheme.colorScheme.onPrimary,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 28.sp
+                            fontSize = 24.sp
                         )
                     }
                 }

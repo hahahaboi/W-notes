@@ -15,12 +15,14 @@ class PreferenceManager(private val context: Context) {
         val FLOATING_BUTTON_Y = floatPreferencesKey("floating_button_y")
         val IS_COLLAPSED = booleanPreferencesKey("is_collapsed")
         val DOCKED_EDGE = stringPreferencesKey("docked_edge")
+        val LOCKED_PIN = stringPreferencesKey("locked_pin")
     }
 
     val floatingButtonX: Flow<Float?> = context.dataStore.data.map { it[FLOATING_BUTTON_X] }
     val floatingButtonY: Flow<Float?> = context.dataStore.data.map { it[FLOATING_BUTTON_Y] }
     val isCollapsed: Flow<Boolean> = context.dataStore.data.map { it[IS_COLLAPSED] ?: false }
     val dockedEdge: Flow<String?> = context.dataStore.data.map { it[DOCKED_EDGE] }
+    val lockedPin: Flow<String?> = context.dataStore.data.map { it[LOCKED_PIN] }
 
     fun sectionSort(sectionKey: String): Flow<String> {
         val key = stringPreferencesKey("section_sort_$sectionKey")
@@ -45,6 +47,12 @@ class PreferenceManager(private val context: Context) {
         val key = stringPreferencesKey("section_sort_$sectionKey")
         context.dataStore.edit {
             it[key] = sortName
+        }
+    }
+
+    suspend fun saveLockedPin(pin: String) {
+        context.dataStore.edit {
+            it[LOCKED_PIN] = pin
         }
     }
 }

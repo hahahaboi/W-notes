@@ -1,10 +1,10 @@
 package com.tv.wnotes.ui.paths
 
-import androidx.compose.animation.*
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
@@ -35,9 +36,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.tv.wnotes.data.local.entity.Note
+import com.tv.wnotes.ui.components.GroupCollageCard
+import com.tv.wnotes.ui.components.HorizontalStapleConnector
+import com.tv.wnotes.ui.components.PinDialog
+import com.tv.wnotes.ui.components.PinMode
+import com.tv.wnotes.ui.home.HomeItem
 import com.tv.wnotes.viewmodel.FolderViewModel
 import com.tv.wnotes.viewmodel.LinkPathViewModel
 import com.tv.wnotes.viewmodel.NoteViewModel
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,32 +57,63 @@ fun PathDetailScreen(
     noteViewModel: NoteViewModel,
     onBack: () -> Unit,
     onNoteClick: (Long) -> Unit,
-    onOpenDrawer: () -> Unit
+    onNavigateToGroup: (Long, String) -> Unit,
+    onOpenDrawer: () -> Unit,
+    drawerProgress: Float
 ) {
-    val databaseNotes by remember(pathId) { linkPathViewModel.getNotesInPath(pathId) }.collectAsState(initial = emptyList())
-    var editableNotes by remember { mutableStateOf(emptyList<Note>()) }
+    val databaseItems by remember(pathId) { linkPathViewModel.getItemsInPath(pathId) }.collectAsState(initial = emptyList())
+    var editableItems by remember { mutableStateOf(emptyList<HomeItem>()) }
     
-    LaunchedEffect(databaseNotes) {
-        editableNotes = databaseNotes
-    }
+    val density = LocalDensity.current
+    var draggingItemIndex by remember { mutableStateOf<Int?>(null) }
+    var deltaX by remember { mutableStateOf(0f) }
 
-    var searchQuery by remember { mutableStateOf("") }
-    val filteredNotes = remember(editableNotes, searchQuery) {
-        if (searchQuery.isBlank()) editableNotes
-        else editableNotes.filter { 
-            it.title.contains(searchQuery, ignoreCase = true) || 
-            it.content.contains(searchQuery, ignoreCase = true) 
+    LaunchedEffect(databaseItems) {
+        if (draggingItemIndex == null) {
+            val list = mutableListOf<HomeItem>()
+            databaseItems.forEach { item ->
+                when (item) {
+                    is HomeItem.NoteItem -> list.add(item)
+                    is HomeItem.GroupItem -> {
+                        item.groupWithNotes.orderedNotes.forEach { note ->
+                            list.add(HomeItem.NoteItem(note))
+                        }
+                    }
+                }
+            }
+            editableItems = list
         }
     }
 
-    var showEditNotesDialog by remember { mutableStateOf(false) }
-    val allNotes by noteViewModel.allNotes.collectAsState()
-    val folders by folderViewModel.allFolders.collectAsState()
-    val folderNames = remember(folders) { folders.associate { it.id to it.name } }
-    val density = LocalDensity.current
+    var searchQuery by remember { mutableStateOf("") }
+    val filteredItems = remember(editableItems, searchQuery) {
+        if (searchQuery.isBlank()) editableItems
+        else editableItems.filter { item ->
+            when (item) {
+                is HomeItem.NoteItem -> {
+                    item.note.title.contains(searchQuery, ignoreCase = true) || 
+                    item.note.content.contains(searchQuery, ignoreCase = true)
+                }
+                is HomeItem.GroupItem -> {
+                    item.groupWithNotes.group.name.contains(searchQuery, ignoreCase = true) ||
+                    item.groupWithNotes.notes.any { it.title.contains(searchQuery, ignoreCase = true) || it.content.contains(searchQuery, ignoreCase = true) }
+                }
+            }
+        }
+    }
 
-    var draggingItemIndex by remember { mutableStateOf<Int?>(null) }
-    var deltaX by remember { mutableStateOf(0f) }
+    var showEditItemsDialog by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    val allNotes by noteViewModel.allNotes.collectAsState()
+    val homeItems by noteViewModel.homeItems.collectAsState()
+    val folders by folderViewModel.allFolders.collectAsState()
+    val lockedPin by noteViewModel.lockedPin.collectAsState()
+    
+    var noteToLock by remember { mutableStateOf<Note?>(null) }
+    var showPinSetupForNote by remember { mutableStateOf(false) }
+    var showPinEntryForNote by remember { mutableStateOf(false) }
+
+    val folderNames = remember(folders) { folders.associate { it.id to it.name } }
 
     Scaffold(
         topBar = {
@@ -88,7 +127,7 @@ fun PathDetailScreen(
                             fontFamily = FontFamily.SansSerif
                         )
                         Text(
-                            text = "${editableNotes.size} Notes",
+                            text = "${editableItems.size} Items",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -96,20 +135,37 @@ fun PathDetailScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onOpenDrawer) {
-                        Icon(Icons.Default.Menu, contentDescription = "Menu")
+                        com.tv.wnotes.ui.components.WAnimatedIcon(
+                            progress = drawerProgress,
+                            modifier = Modifier.size(24.dp),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showEditNotesDialog = true }) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit Notes")
+                    IconButton(onClick = { showRenameDialog = true }) {
+                        Icon(Icons.Default.Edit, contentDescription = "Rename Staple")
+                    }
+                    IconButton(onClick = { showEditItemsDialog = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "Edit Items")
                     }
                     TextButton(onClick = {
-                        linkPathViewModel.updateOrder(pathId, editableNotes)
+                        linkPathViewModel.updateOrder(pathId, editableItems)
                     }) {
                         Text("Save Order")
                     }
                 }
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { onNoteClick(-1L) },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                shape = CircleShape
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "New Note")
+            }
         }
     ) { padding ->
         Column(
@@ -135,9 +191,9 @@ fun PathDetailScreen(
                 singleLine = true
             )
 
-            if (filteredNotes.isEmpty()) {
+            if (filteredItems.isEmpty()) {
                 Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    Text(if (searchQuery.isEmpty()) "No notes in this path" else "No matches found")
+                    Text(if (searchQuery.isEmpty()) "No items in this path" else "No matches found")
                 }
             } else {
                 if (searchQuery.isEmpty()) {
@@ -149,111 +205,218 @@ fun PathDetailScreen(
                     )
                 }
 
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    contentPadding = PaddingValues(horizontal = 32.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    itemsIndexed(filteredNotes, key = { _, note -> note.id }) { index, note ->
-                        val isDragging = draggingItemIndex == index
-                        val zIndex = if (isDragging) 1f else 0f
-                        val translationX = if (isDragging) deltaX else 0f
-                        
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .zIndex(zIndex)
-                                .graphicsLayer { this.translationX = translationX }
-                                .pointerInput(filteredNotes, searchQuery) {
-                                    if (searchQuery.isEmpty()) {
-                                        detectDragGesturesAfterLongPress(
-                                            onDragStart = { draggingItemIndex = index },
-                                            onDrag = { change, dragAmount ->
-                                                change.consume()
-                                                deltaX += dragAmount.x
-                                                
-                                                val itemWidthPx = with(density) { 200.dp.toPx() }
-                                                val targetIndex = if (deltaX > itemWidthPx / 2) index + 1 else if (deltaX < -itemWidthPx / 2) index - 1 else index
+                val rowState = androidx.compose.foundation.lazy.rememberLazyListState()
+                Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    LazyRow(
+                        state = rowState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 32.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        itemsIndexed(filteredItems, key = { _, item -> item.id }) { index, item ->
+                            val isDragging = draggingItemIndex == index
+                            val zIndex = if (isDragging) 1f else 0f
+                            val translationX = if (isDragging) deltaX else 0f
+                            
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .zIndex(zIndex)
+                                    .graphicsLayer { this.translationX = translationX }
+                                    .pointerInput(filteredItems, searchQuery) {
+                                        if (searchQuery.isEmpty()) {
+                                            detectDragGesturesAfterLongPress(
+                                                onDragStart = { draggingItemIndex = index },
+                                                onDrag = { change, dragAmount ->
+                                                    change.consume()
+                                                    deltaX += dragAmount.x
+                                                    
+                                                    val itemWidthPx = with(density) { 200.dp.toPx() }
+                                                    val targetIndex = if (deltaX > itemWidthPx / 2) index + 1 else if (deltaX < -itemWidthPx / 2) index - 1 else index
 
-                                                if (targetIndex in editableNotes.indices && targetIndex != index) {
-                                                    val newList = editableNotes.toMutableList()
-                                                    val movedNote = newList.removeAt(index)
-                                                    newList.add(targetIndex, movedNote)
-                                                    editableNotes = newList
-                                                    draggingItemIndex = targetIndex
-                                                    deltaX = 0f
-                                                }
-                                            },
-                                            onDragEnd = { draggingItemIndex = null; deltaX = 0f },
-                                            onDragCancel = { draggingItemIndex = null; deltaX = 0f }
-                                        )
+                                                    if (targetIndex in editableItems.indices && targetIndex != index) {
+                                                        val newList = editableItems.toMutableList()
+                                                        val movedItem = newList.removeAt(index)
+                                                        newList.add(targetIndex, movedItem)
+                                                        editableItems = newList
+                                                        draggingItemIndex = targetIndex
+                                                        deltaX = 0f
+                                                        
+                                                        // Persist the new order
+                                                        linkPathViewModel.updateOrder(pathId, newList)
+                                                    }
+                                                },
+                                                onDragEnd = { draggingItemIndex = null; deltaX = 0f },
+                                                onDragCancel = { draggingItemIndex = null; deltaX = 0f }
+                                            )
+                                        }
+                                    }
+                            ) {
+                                when (item) {
+                                    is HomeItem.NoteItem -> {
+                                        val note = item.note
+                                        var showNoteMenu by remember { mutableStateOf(false) }
+                                        Box {
+                                            PathNoteCard(
+                                                note = note,
+                                                folderName = folderNames[note.folderId],
+                                                onClick = { onNoteClick(note.id) },
+                                                onLongPress = { showNoteMenu = true },
+                                                isDragging = isDragging
+                                            )
+                                            DropdownMenu(
+                                                expanded = showNoteMenu,
+                                                onDismissRequest = { showNoteMenu = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text(if (note.isLocked) "Unlock" else "Lock") },
+                                                    onClick = {
+                                                        showNoteMenu = false
+                                                        if (note.isLocked) {
+                                                            noteViewModel.toggleLock(note)
+                                                        } else {
+                                                            noteToLock = note
+                                                            if (lockedPin == null) showPinSetupForNote = true
+                                                            else showPinEntryForNote = true
+                                                        }
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                    is HomeItem.GroupItem -> {
+                                        // Expanded above
                                     }
                                 }
-                        ) {
-                            PathNoteCard(
-                                note = note,
-                                folderName = folderNames[note.folderId],
-                                onClick = { onNoteClick(note.id) },
-                                isDragging = isDragging
-                            )
-                            
-                            if (index < filteredNotes.size - 1) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
-                                    modifier = Modifier.padding(horizontal = 8.dp).size(24.dp)
-                                )
+                                
+                                if (index < filteredItems.size - 1) {
+                                    HorizontalStapleConnector()
+                                }
                             }
                         }
                     }
+
+                    com.tv.wnotes.ui.components.WScrollbar(
+                        listState = rowState,
+                        orientation = com.tv.wnotes.ui.components.WScrollbarOrientation.HORIZONTAL,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)
+                    )
                 }
             }
         }
 
-        if (showEditNotesDialog) {
-            val selectedNotes = remember { mutableStateListOf<Long>().apply { 
-                addAll(editableNotes.map { it.id })
+        if (showEditItemsDialog) {
+            val selectedItemIds = remember { mutableStateListOf<String>().apply { 
+                addAll(editableItems.map { it.id })
             } }
 
             AlertDialog(
-                onDismissRequest = { showEditNotesDialog = false },
-                title = { Text("Edit Stapled Notes") },
+                onDismissRequest = { showEditItemsDialog = false },
+                title = { Text("Edit Stapled Items") },
                 text = {
                     Column {
-                        Text("Select notes to staple together:", fontWeight = FontWeight.Bold)
+                        Text("Select items to staple together:", fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(8.dp))
+                        val dialogListState = androidx.compose.foundation.lazy.rememberLazyListState()
                         Box(modifier = Modifier.height(300.dp)) {
-                            LazyColumn {
-                                items(allNotes) { note ->
+                            LazyColumn(state = dialogListState) {
+                                items(homeItems) { item ->
                                     Row(
                                         modifier = Modifier.fillMaxWidth().clickable {
-                                            if (selectedNotes.contains(note.id)) selectedNotes.remove(note.id)
-                                            else selectedNotes.add(note.id)
+                                            if (selectedItemIds.contains(item.id)) selectedItemIds.remove(item.id)
+                                            else selectedItemIds.add(item.id)
                                         }.padding(8.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Checkbox(checked = selectedNotes.contains(note.id), onCheckedChange = null)
-                                        Text(note.title.ifEmpty { "Untitled" }, modifier = Modifier.padding(start = 8.dp))
+                                        Checkbox(checked = selectedItemIds.contains(item.id), onCheckedChange = null)
+                                        val label = when (item) {
+                                            is HomeItem.NoteItem -> item.note.title
+                                            is HomeItem.GroupItem -> "[Group] ${item.groupWithNotes.group.name}"
+                                        }
+                                        Text(label.ifEmpty { "Untitled" }, modifier = Modifier.padding(start = 8.dp))
                                     }
                                 }
                             }
+                            com.tv.wnotes.ui.components.WScrollbar(
+                                listState = dialogListState,
+                                modifier = Modifier.align(Alignment.CenterEnd)
+                            )
                         }
                     }
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        val newNoteList = allNotes.filter { selectedNotes.contains(it.id) }
-                        editableNotes = newNoteList
-                        linkPathViewModel.updateOrder(pathId, newNoteList)
-                        showEditNotesDialog = false
+                        val newItemList = homeItems.filter { selectedItemIds.contains(it.id) }
+                        editableItems = newItemList
+                        linkPathViewModel.updateOrder(pathId, newItemList)
+                        showEditItemsDialog = false
                     }) { Text("Update") }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showEditNotesDialog = false }) { Text("Cancel") }
+                    TextButton(onClick = { showEditItemsDialog = false }) { Text("Cancel") }
                 }
             )
         }
+
+        if (showRenameDialog) {
+            var value by remember { mutableStateOf(pathName) }
+            AlertDialog(
+                onDismissRequest = { showRenameDialog = false },
+                title = { Text("Rename Staple") },
+                text = {
+                    OutlinedTextField(
+                        value = value,
+                        onValueChange = { value = it },
+                        placeholder = { Text("Staple name") },
+                        singleLine = true
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        if (value.isNotBlank()) {
+                            val path = linkPathViewModel.allPaths.value.find { it.id == pathId }
+                            if (path != null) {
+                                linkPathViewModel.renameStaple(path, value.trim())
+                            }
+                            showRenameDialog = false
+                        }
+                    }) {
+                        Text("Rename")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRenameDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+    }
+
+    if (showPinSetupForNote) {
+        PinDialog(
+            mode = PinMode.SET,
+            onDismiss = { showPinSetupForNote = false },
+            onConfirm = {
+                noteViewModel.setLockedPin(it)
+                noteToLock?.let { note -> noteViewModel.toggleLock(note) }
+                showPinSetupForNote = false
+                noteToLock = null
+            }
+        )
+    }
+
+    if (showPinEntryForNote) {
+        PinDialog(
+            mode = PinMode.ENTER,
+            correctPin = lockedPin,
+            onDismiss = { showPinEntryForNote = false },
+            onConfirm = {
+                noteToLock?.let { note -> noteViewModel.toggleLock(note) }
+                showPinEntryForNote = false
+                noteToLock = null
+            }
+        )
     }
 }
 
@@ -262,6 +425,7 @@ fun PathNoteCard(
     note: Note,
     folderName: String?,
     onClick: () -> Unit,
+    onLongPress: () -> Unit = {},
     isDragging: Boolean
 ) {
     val elevation by animateDpAsState(if (isDragging) 12.dp else 4.dp, label = "elev")
@@ -272,7 +436,12 @@ fun PathNoteCard(
             .width(160.dp)
             .aspectRatio(1f)
             .scale(scale)
-            .clickable { onClick() },
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { onClick() },
+                    onLongPress = { onLongPress() }
+                )
+            },
         shape = RoundedCornerShape(22.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = elevation)
     ) {

@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import com.tv.wnotes.ui.editor.engine.model.*
 import com.tv.wnotes.ui.editor.engine.state.*
+import kotlinx.collections.immutable.toImmutableList
 
 /**
  * Logic for building and managing the floating drag preview.
@@ -16,12 +17,17 @@ object WDragPreviewManager {
     fun buildPreview(
         snapshot: WEditorSnapshot,
         layoutProvider: WLayoutProvider,
-        fingerPosition: Offset
+        fingerPosition: Offset,
+        ranges: List<WSelectionRange>
     ): WDragPreviewState {
-        val range = snapshot.selection.ranges.firstOrNull() ?: return WDragPreviewState()
-        val normalized = WSelectionManager.normalize(range, snapshot.document.blocks)
+        if (ranges.isEmpty()) return WDragPreviewState()
         
-        val fragment = captureFragment(snapshot.document, normalized)
+        val fragments = ranges.map { range ->
+            val normalized = WSelectionManager.normalize(range, snapshot.document.blocks)
+            captureFragment(snapshot.document, normalized)
+        }
+        
+        val fragment = combineFragments(fragments)
         
         val selectionBounds = layoutProvider.getSelectionBounds()
         val combinedRect = if (selectionBounds.isEmpty()) Rect.Zero else {
@@ -39,7 +45,6 @@ object WDragPreviewManager {
         }
 
         // Calculate finger offset: Vector from finger to top-left of selection.
-        // We ensure we don't divide by zero or use crazy values.
         val offset = if (combinedRect != Rect.Zero) {
             combinedRect.topLeft - fingerPosition
         } else {
@@ -57,6 +62,30 @@ object WDragPreviewManager {
             opacity = 0.95f,
             fingerOffset = offset
         )
+    }
+
+    private fun combineFragments(fragments: List<WDocumentFragment>): WDocumentFragment {
+        if (fragments.isEmpty()) return WDocumentFragment(emptyList())
+        if (fragments.size == 1) return fragments[0]
+        
+        val allBlocks = mutableListOf<com.tv.wnotes.ui.editor.engine.model.WBlock>()
+        fragments.forEach { fragment ->
+            val last = allBlocks.lastOrNull()
+            val first = fragment.blocks.firstOrNull()
+            
+            if (last is WTextBlock && first is WTextBlock) {
+                // Merge text blocks with a space
+                val joinedText = last.text + " " + first.text
+                val shiftedFirstSpans = first.spans.map { it.copy(start = it.start + last.text.length + 1, end = it.end + last.text.length + 1) }
+                val joinedSpans = (last.spans + shiftedFirstSpans).toImmutableList()
+                
+                allBlocks[allBlocks.size - 1] = last.copyWithText(joinedText, joinedSpans)
+                allBlocks.addAll(fragment.blocks.drop(1))
+            } else {
+                allBlocks.addAll(fragment.blocks)
+            }
+        }
+        return WDocumentFragment(allBlocks)
     }
 
     private fun captureFragment(document: WDocument, range: WSelectionRange): WDocumentFragment {

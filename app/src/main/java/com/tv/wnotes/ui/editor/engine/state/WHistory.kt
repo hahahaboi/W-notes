@@ -2,6 +2,7 @@ package com.tv.wnotes.ui.editor.engine.state
 
 import androidx.compose.runtime.Immutable
 import com.tv.wnotes.ui.editor.engine.model.*
+import com.tv.wnotes.data.local.entity.ContextAnnotation
 import com.tv.wnotes.ui.editor.engine.logic.WSelectionManager
 import com.tv.wnotes.ui.editor.engine.logic.WContentManager
 import kotlinx.collections.immutable.toImmutableList
@@ -25,15 +26,18 @@ sealed interface WOperation {
         val oldSpans: List<WTextSpan>,
         val newSpans: List<WTextSpan>,
         val beforeCursor: WSelectionPoint,
-        val afterCursor: WSelectionPoint
+        val afterCursor: WSelectionPoint,
+        val beforeAnnotations: List<ContextAnnotation>,
+        val afterAnnotations: List<ContextAnnotation>
     ) : WOperation {
-        override fun redo(snapshot: WEditorSnapshot) = applyChange(snapshot, newText, newSpans, afterCursor)
-        override fun undo(snapshot: WEditorSnapshot) = applyChange(snapshot, oldText, oldSpans, beforeCursor)
+        override fun redo(snapshot: WEditorSnapshot) = applyChange(snapshot, newText, newSpans, afterAnnotations, afterCursor)
+        override fun undo(snapshot: WEditorSnapshot) = applyChange(snapshot, oldText, oldSpans, beforeAnnotations, beforeCursor)
 
         private fun applyChange(
             snapshot: WEditorSnapshot,
             text: String,
             spans: List<WTextSpan>,
+            annotations: List<ContextAnnotation>,
             cursor: WSelectionPoint
         ): WEditorSnapshot {
             val blocks = snapshot.document.blocks.toMutableList()
@@ -53,6 +57,7 @@ sealed interface WOperation {
                     blocks = blocks.toImmutableList(),
                     revision = snapshot.document.revision + 1
                 ),
+                annotations = annotations.toImmutableList(),
                 cursor = snapshot.cursor.copy(position = cursor),
                 selection = WSelectionManager.collapseTo(cursor)
             )
@@ -72,54 +77,9 @@ sealed interface WOperation {
                 oldSpans = previous.oldSpans,
                 newSpans = this.newSpans,
                 beforeCursor = previous.beforeCursor,
-                afterCursor = this.afterCursor
-            )
-        }
-    }
-
-    /**
-     * Captures a block split (Enter key).
-     */
-    data class SplitBlock(
-        val originalBlockId: String,
-        val splitOffset: Int,
-        val newBlock: WTextBlock,
-        val beforeCursor: WSelectionPoint,
-        val afterCursor: WSelectionPoint
-    ) : WOperation {
-        override fun redo(snapshot: WEditorSnapshot) = applySplit(snapshot)
-        override fun undo(snapshot: WEditorSnapshot) = applyMerge(snapshot)
-
-        private fun applySplit(snapshot: WEditorSnapshot): WEditorSnapshot {
-            val blocks = snapshot.document.blocks.toMutableList()
-            val index = blocks.indexOfFirst { it.id == originalBlockId }
-            if (index == -1) return snapshot
-            val block = blocks[index] as WTextBlock
-            val head = block.copy(text = block.text.substring(0, splitOffset), revision = block.revision + 1)
-            blocks[index] = head
-            blocks.add(index + 1, newBlock)
-            return snapshot.copy(
-                document = snapshot.document.copy(blocks = blocks.toImmutableList()),
-                cursor = snapshot.cursor.copy(position = afterCursor)
-            )
-        }
-
-        private fun applyMerge(snapshot: WEditorSnapshot): WEditorSnapshot {
-            val blocks = snapshot.document.blocks.toMutableList()
-            val index = blocks.indexOfFirst { it.id == originalBlockId }
-            if (index == -1) return snapshot
-            val block = blocks[index] as WTextBlock
-            // Assuming newBlock was inserted right after
-            blocks.removeAt(index + 1)
-            val restored = block.copy(
-                text = block.text + newBlock.text,
-                spans = block.spans + newBlock.spans.map { it.copy(start = it.start + block.text.length, end = it.end + block.text.length) },
-                revision = block.revision + 1
-            )
-            blocks[index] = restored
-            return snapshot.copy(
-                document = snapshot.document.copy(blocks = blocks.toImmutableList()),
-                cursor = snapshot.cursor.copy(position = beforeCursor)
+                afterCursor = this.afterCursor,
+                beforeAnnotations = previous.beforeAnnotations,
+                afterAnnotations = this.afterAnnotations
             )
         }
     }

@@ -63,7 +63,8 @@ data class WMediaBlock(
     override val style: WBlockStyle = WBlockStyle(),
     val url: String,
     val mediaType: MediaType,
-    val caption: String? = null
+    val caption: String? = null,
+    val widthPercent: Float = 1.0f
 ) : WBlock
 
 @Immutable

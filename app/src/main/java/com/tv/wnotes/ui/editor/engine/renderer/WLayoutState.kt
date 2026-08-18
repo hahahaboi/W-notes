@@ -21,10 +21,11 @@ class WLayoutState : WLayoutProvider {
     val blockOffsets = mutableStateMapOf<String, Offset>()
     val blockHeights = mutableStateMapOf<String, Float>()
     
-    var density: Float = 1f
-    var currentSelection by mutableStateOf<WSelectionState?>(null)
-    var currentBlocks by mutableStateOf<List<WBlock>>(emptyList())
-
+    override var density: Float = 1f
+    override var currentSelection by mutableStateOf<WSelectionState?>(null)
+    override var currentBlocks by mutableStateOf<List<WBlock>>(emptyList())
+    override var currentAnnotations by mutableStateOf<List<com.tv.wnotes.data.local.entity.ContextAnnotation>>(emptyList())
+    
     override fun getSelectionPointForOffset(offset: Offset): WSelectionPoint? {
         return hitTest(offset)?.let {
             WSelectionPoint(it.blockId, it.characterIndex)
@@ -36,7 +37,6 @@ class WLayoutState : WLayoutProvider {
         if (!selection.isActive) return false
         
         val hit = hitTest(offset) ?: return false
-        println("isOffsetInsideSelection: hit=${hit.blockId}:${hit.characterIndex}, blocks=${currentBlocks.size}")
         
         return com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.contains(
             state = selection,
@@ -87,6 +87,18 @@ class WLayoutState : WLayoutProvider {
         return allRects
     }
 
+    override fun getAnnotationBounds(annotationId: String): List<Rect> {
+        return getAnnotationGeometry(annotationId)?.lineRects ?: emptyList()
+    }
+
+    override fun getAnnotationGeometry(annotationId: String): com.tv.wnotes.ui.editor.engine.logic.AnnotationGeometry? {
+        val annotation = currentAnnotations.find { it.id == annotationId } ?: return null
+        val layout = layoutResults[annotation.blockId] ?: return null
+        val offset = blockOffsets[annotation.blockId] ?: Offset.Zero
+        
+        return WAnnotationGeometryCalculator.calculateGeometry(annotation, layout, offset)
+    }
+
     override fun hitTest(offset: Offset): WHitResult? {
         val layouts = blockOffsets.mapNotNull { (id, blockOffset) ->
             val layout = layoutResults[id] ?: return@mapNotNull null
@@ -97,6 +109,15 @@ class WLayoutState : WLayoutProvider {
         }.sortedBy { it.relativeOffset.y }
 
         return WHitTestEngine.hitTest(offset, layouts)
+    }
+
+    override fun getDocumentBottom(): Float {
+        var bottom = 0f
+        blockOffsets.forEach { (id, offset) ->
+            val height = blockHeights[id] ?: 0f
+            bottom = maxOf(bottom, offset.y + height)
+        }
+        return bottom
     }
 
     /**

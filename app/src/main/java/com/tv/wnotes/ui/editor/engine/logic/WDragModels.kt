@@ -9,7 +9,7 @@ import com.tv.wnotes.ui.editor.engine.state.WSelectionRange
  * Represents an active drag-and-drop session.
  */
 data class WDragSession(
-    val selectedRange: WSelectionRange,
+    val selectedRanges: List<WSelectionRange>,
     val initialFingerPosition: Offset
 )
 
@@ -20,7 +20,7 @@ sealed interface WDragEvent {
     data class ScrollUpRequested(val speed: Float) : WDragEvent
     data class ScrollDownRequested(val speed: Float) : WDragEvent
     data class DropExecuted(
-        val sourceRange: WSelectionRange, 
+        val sourceRanges: List<WSelectionRange>, 
         val targetPoint: WSelectionPoint,
         val virtualLineCount: Int = 0
     ) : WDragEvent

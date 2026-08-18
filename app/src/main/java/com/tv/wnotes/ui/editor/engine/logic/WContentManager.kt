@@ -38,6 +38,14 @@ object WContentManager {
         val updatedBlock = block.copyWithText(newText, newSpans)
         blocks[blockIndex] = updatedBlock
 
+        // Update Annotations
+        val newAnnotations = WAnnotationManager.shiftAnnotationsForInsertion(
+            workingSnapshot.annotations,
+            cursor.blockId,
+            cursor.offset,
+            text.length
+        )
+
         val newPoint = WSelectionPoint(block.id, cursor.offset + text.length)
         
         return workingSnapshot.copy(
@@ -45,6 +53,7 @@ object WContentManager {
                 blocks = blocks.toImmutableList(),
                 revision = workingSnapshot.document.revision + 1
             ),
+            annotations = newAnnotations.toImmutableList(),
             cursor = workingSnapshot.cursor.copy(position = newPoint, blinkVisible = true),
             selection = WSelectionManager.collapseTo(newPoint)
         )
@@ -71,9 +80,18 @@ object WContentManager {
             
             blocks[index] = block.copyWithText(newText, newSpans)
 
+            // Update Annotations
+            val newAnnotations = WAnnotationManager.shiftAnnotationsForDeletion(
+                snapshot.annotations,
+                cursor.blockId,
+                cursor.offset - 1,
+                cursor.offset
+            )
+
             val newPoint = cursor.copy(offset = cursor.offset - 1)
             return snapshot.copy(
                 document = snapshot.document.copy(blocks = blocks.toImmutableList(), revision = snapshot.document.revision + 1),
+                annotations = newAnnotations.toImmutableList(),
                 cursor = snapshot.cursor.copy(position = newPoint, blinkVisible = true),
                 selection = WSelectionManager.collapseTo(newPoint)
             )
@@ -102,8 +120,9 @@ object WContentManager {
 
         val updatedHead = block.copyWithText(headText, headSpans)
         
+        val newTailId = UUID.randomUUID().toString()
         val newTail = WTextBlock(
-            id = UUID.randomUUID().toString(),
+            id = newTailId,
             text = tailText,
             spans = tailSpans,
             type = if (block is WTextBlock) block.type else TextBlockType.Body,
@@ -113,9 +132,18 @@ object WContentManager {
         blocks[index] = updatedHead
         blocks.add(index + 1, newTail)
 
-        val newPoint = WSelectionPoint(newTail.id, 0)
+        // Split Annotations
+        val newAnnotations = WAnnotationManager.splitAnnotations(
+            snapshot.annotations,
+            block.id,
+            newTailId,
+            cursor.offset
+        )
+
+        val newPoint = WSelectionPoint(newTailId, 0)
         return snapshot.copy(
             document = snapshot.document.copy(blocks = blocks.toImmutableList(), revision = snapshot.document.revision + 1),
+            annotations = newAnnotations.toImmutableList(),
             cursor = snapshot.cursor.copy(position = newPoint, blinkVisible = true),
             selection = WSelectionManager.collapseTo(newPoint)
         )
@@ -131,13 +159,22 @@ object WContentManager {
         
         if (prevBlock !is WTextContainer || currentBlock !is WTextContainer) return snapshot
 
+        val prevTextLen = prevBlock.text.length
         val newText = prevBlock.text + currentBlock.text
         val shiftedCurrentSpans = currentBlock.spans.map { 
-            it.copy(start = it.start + prevBlock.text.length, end = it.end + prevBlock.text.length) 
+            it.copy(start = it.start + prevTextLen, end = it.end + prevTextLen) 
         }
         val newSpans = (prevBlock.spans + shiftedCurrentSpans).toImmutableList()
 
         val mergedBlock = prevBlock.copyWithText(newText, newSpans)
+
+        // Merge Annotations
+        val currentAnnotations = WAnnotationManager.mergeAnnotations(
+            snapshot.annotations,
+            prevBlock.id,
+            blockId,
+            prevTextLen
+        )
 
         val cursorOffset = prevBlock.text.length
         blocks.removeAt(index)
@@ -146,6 +183,7 @@ object WContentManager {
         val newPoint = WSelectionPoint(mergedBlock.id, cursorOffset)
         return snapshot.copy(
             document = snapshot.document.copy(blocks = blocks.toImmutableList(), revision = snapshot.document.revision + 1),
+            annotations = currentAnnotations.toImmutableList(),
             cursor = snapshot.cursor.copy(position = newPoint, blinkVisible = true),
             selection = WSelectionManager.collapseTo(newPoint)
         )
@@ -153,7 +191,15 @@ object WContentManager {
 
     fun deleteSelection(snapshot: WEditorSnapshot): WEditorSnapshot {
         if (snapshot.selection.ranges.isEmpty()) return snapshot
-        val range = WSelectionManager.normalize(snapshot.selection.ranges.first(), snapshot.document.blocks)
+        
+        val activeRangeId = snapshot.selection.activeRangeId
+        val targetRange = if (activeRangeId != null) {
+            snapshot.selection.ranges.find { it.id == activeRangeId } ?: snapshot.selection.ranges.first()
+        } else {
+            snapshot.selection.ranges.first()
+        }
+        
+        val range = WSelectionManager.normalize(targetRange, snapshot.document.blocks)
         val blocks = snapshot.document.blocks.toMutableList()
         
         val startIdx = blocks.indexOfFirst { it.id == range.anchor.blockId }
@@ -169,9 +215,19 @@ object WContentManager {
             val newSpans = WSpanManager.shiftSpansForDeletion(block.spans, range.anchor.offset, range.focus.offset)
             
             blocks[startIdx] = block.copyWithText(newText, newSpans)
+
+            // Update Annotations
+            val newAnnotations = WAnnotationManager.shiftAnnotationsForDeletion(
+                snapshot.annotations,
+                block.id,
+                range.anchor.offset,
+                range.focus.offset
+            )
+
             val newPoint = WSelectionPoint(block.id, range.anchor.offset)
             return snapshot.copy(
                 document = snapshot.document.copy(blocks = blocks.toImmutableList(), revision = snapshot.document.revision + 1),
+                annotations = newAnnotations.toImmutableList(),
                 cursor = snapshot.cursor.copy(position = newPoint),
                 selection = WSelectionManager.collapseTo(newPoint)
             )
@@ -191,6 +247,32 @@ object WContentManager {
 
             val mergedBlock = startBlock.copyWithText(remainingHead + remainingTail, (headSpans + tailSpans).toImmutableList())
             
+            // Annotations handling for multi-block delete:
+            var currentAnnotations = WAnnotationManager.shiftAnnotationsForDeletion(
+                snapshot.annotations,
+                startBlock.id,
+                range.anchor.offset,
+                startBlock.text.length
+            )
+            
+            currentAnnotations = WAnnotationManager.shiftAnnotationsForDeletion(
+                currentAnnotations,
+                endBlock.id,
+                0,
+                range.focus.offset
+            ).map { annotation ->
+                if (annotation.blockId == endBlock.id) {
+                    annotation.copy(
+                        blockId = startBlock.id,
+                        startOffset = annotation.startOffset + remainingHead.length,
+                        endOffset = annotation.endOffset + remainingHead.length
+                    )
+                } else annotation
+            }
+            
+            val middleBlockIds = blocks.subList(startIdx + 1, endIdx).map { it.id }.toSet()
+            currentAnnotations = currentAnnotations.filter { it.blockId !in middleBlockIds }
+
             // Remove blocks from startIdx to endIdx and insert merged
             val subList = blocks.subList(startIdx, endIdx + 1)
             subList.clear()
@@ -199,6 +281,7 @@ object WContentManager {
             val newPoint = WSelectionPoint(mergedBlock.id, range.anchor.offset)
             return snapshot.copy(
                 document = snapshot.document.copy(blocks = blocks.toImmutableList(), revision = snapshot.document.revision + 1),
+                annotations = currentAnnotations.toImmutableList(),
                 cursor = snapshot.cursor.copy(position = newPoint),
                 selection = WSelectionManager.collapseTo(newPoint)
             )

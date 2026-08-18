@@ -18,6 +18,7 @@ sealed interface WEditorCommand {
     data class BeginSelection(val point: WSelectionPoint) : WEditorCommand
     data class ExtendSelection(val point: WSelectionPoint) : WEditorCommand
     data class BeginDragSelection(val point: WSelectionPoint, val position: Offset) : WEditorCommand
+    data class TapBelowDocument(val offset: Offset) : WEditorCommand
     
     // Drag Lifecycle Commands
     data class StartPreparingLift(val range: WSelectionRange, val position: Offset) : WEditorCommand
@@ -30,8 +31,24 @@ sealed interface WEditorCommand {
 
     data class UpdateActiveHandle(val handleType: com.tv.wnotes.ui.editor.engine.state.WSelectionHandleType?) : WEditorCommand
     data class MoveSelectionHandle(val handleType: com.tv.wnotes.ui.editor.engine.state.WSelectionHandleType, val point: WSelectionPoint) : WEditorCommand
+    
+    // Multi-Range Selection (Stage XX)
+    data class ActivateSelection(val rangeId: String) : WEditorCommand
+    data class RemoveSelectionRange(val rangeId: String) : WEditorCommand
+    data class SetSelectionInteraction(val mode: com.tv.wnotes.ui.editor.engine.state.WSelectionInteraction) : WEditorCommand
+    data class ApplySpan(val spanType: com.tv.wnotes.ui.editor.engine.model.SpanType) : WEditorCommand
+
+    // Block Management
+    data class InsertBlock(val block: com.tv.wnotes.ui.editor.engine.model.WBlock, val index: Int? = null) : WEditorCommand
+    data class UpdateBlock(val block: com.tv.wnotes.ui.editor.engine.model.WBlock) : WEditorCommand
+
     data object ClearSelection : WEditorCommand
+    data object ClearSelectionAndHideCursor : WEditorCommand
     data object SelectAll : WEditorCommand
+    data object Copy : WEditorCommand
+    data object Cut : WEditorCommand
+    data object Paste : WEditorCommand
+    data object MakeTabFromSelection : WEditorCommand
     
     // Keyboard Actions
     data object SplitBlock : WEditorCommand
@@ -40,6 +57,15 @@ sealed interface WEditorCommand {
     
     // Navigation
     data class NavigateCursor(val direction: NavigationDirection) : WEditorCommand
+
+    // Context Annotations
+    data class CreateAnnotation(val content: String, val range: WSelectionRange, val anchorText: String) : WEditorCommand
+    data class UpdateAnnotation(val id: String, val content: String) : WEditorCommand
+    data class DeleteAnnotation(val id: String) : WEditorCommand
+    data class ShowAnnotation(val id: String) : WEditorCommand
+    data object DismissAnnotation : WEditorCommand
+    data class StartCreatingAnnotation(val range: WSelectionRange, val anchorText: String) : WEditorCommand
+    data object CancelCreatingAnnotation : WEditorCommand
 
     // Telemetry
     data class UpdateTelemetry(val transform: (com.tv.wnotes.ui.editor.engine.state.WTelemetryState) -> com.tv.wnotes.ui.editor.engine.state.WTelemetryState) : WEditorCommand

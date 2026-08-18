@@ -1,0 +1,15 @@
+- [x] Implement Unlimited Scrolling & "Write Anywhere"
+    - [x] Update Models and Commands
+        - [x] Add `EXTEND_DOCUMENT` to `WMutationType` in `WMutationModels.kt`
+        - [x] Add `TapBelowDocument` to `WEditorCommand.kt`
+    - [x] Update Logic and Engine
+        - [x] Update `WGestureCoordinator.kt` to detect taps below document
+        - [x] Update `WLayoutProvider.kt` and `WLayoutState.kt` with `getDocumentBottom()`
+        - [x] Implement `extendDocument` in `WMutationEngine.kt`
+        - [x] Handle `TapBelowDocument` in `WEditorHost.kt`
+    - [x] Update UI
+        - [x] Add infinite scrolling spacer in `WEditorRenderer.kt`
+- [x] Verify Implementation
+    - [x] Build and Run
+    - [ ] Manual test: Scroll past end
+    - [ ] Manual test: Tap below content to start writing

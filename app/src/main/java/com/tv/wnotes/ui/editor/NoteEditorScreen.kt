@@ -1,13 +1,26 @@
 package com.tv.wnotes.ui.editor
 
 import android.content.Intent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -18,17 +31,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.TextFieldValue
 import com.tv.wnotes.data.local.entity.LinkPath
 import com.tv.wnotes.data.local.entity.Note
+import com.tv.wnotes.data.local.entity.NoteTab
 import com.tv.wnotes.ui.components.DraggableTextField
 import com.tv.wnotes.ui.components.FolderAssignmentSheet
 import com.tv.wnotes.ui.components.StapleAssignmentSheet
 import com.tv.wnotes.ui.components.RenameNoteDialog
-import com.tv.wnotes.ui.editor.engine.model.WDocument
-import com.tv.wnotes.ui.editor.engine.model.WTextBlock
-import com.tv.wnotes.ui.editor.engine.model.WTextContainer
+import com.tv.wnotes.ui.editor.engine.model.*
+import com.tv.wnotes.ui.editor.engine.state.*
+import com.tv.wnotes.ui.editor.engine.logic.WEditorCommand
+import com.tv.wnotes.data.local.entity.ContextAnnotation
+import com.tv.wnotes.ui.home.HomeItem
+import kotlinx.collections.immutable.toImmutableList
 import com.tv.wnotes.viewmodel.FolderViewModel
 import com.tv.wnotes.viewmodel.LinkPathViewModel
 import com.tv.wnotes.viewmodel.NoteViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private const val useNextGenEditor = true
 
@@ -37,6 +55,7 @@ private const val useNextGenEditor = true
 fun NoteEditorScreen(
     noteId: Long?,
     pathId: Long?,
+    folderId: Long? = null,
     viewModel: NoteViewModel,
     folderViewModel: FolderViewModel,
     linkPathViewModel: LinkPathViewModel,
@@ -46,7 +65,7 @@ fun NoteEditorScreen(
     val context = LocalContext.current
     var title by remember { mutableStateOf("") }
     var contentValue by remember { mutableStateOf(TextFieldValue("")) }
-    var selectedFolderId by remember { mutableStateOf<Long?>(null) }
+    var selectedFolderId by remember { mutableStateOf<Long?>(folderId) }
     var currentNote by remember { mutableStateOf<Note?>(null) }
     var editableNoteId by remember { mutableStateOf<Long?>(noteId) }
     
@@ -55,22 +74,107 @@ fun NoteEditorScreen(
     var showPathSheet by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
 
-    // Use a stable key for the editor host so it doesn't restart when a new note gets an ID.
-    val initialNoteId = remember { noteId }
-    val initialContent = remember { contentValue.text }
+    // --- MULTI-TAB STATE ---
+    val tabs by if (editableNoteId != null) {
+        viewModel.getTabsForNote(editableNoteId!!).collectAsState(initial = emptyList())
+    } else {
+        remember { mutableStateOf(emptyList<NoteTab>()) }
+    }
+    
+    var activeTabId by remember { mutableStateOf<Long?>(null) }
+    val tabSnapshots = remember { mutableStateMapOf<Long, WEditorSnapshot>() }
+    val scope = rememberCoroutineScope()
+    
+    var lastTabCreatedFromSelection by remember { mutableStateOf(false) }
 
-    // --- NEXT-GEN EDITOR TOGGLE ---
+    // Automatically select the first tab if none is active
+    LaunchedEffect(tabs) {
+        if (activeTabId == null && tabs.isNotEmpty()) {
+            activeTabId = tabs.first().id
+        }
+    }
+
+    val tabListState = rememberLazyListState()
+    
+    // Auto-scroll to active tab when it changes
+    LaunchedEffect(activeTabId) {
+        val index = tabs.indexOfFirst { it.id == activeTabId }
+        if (index != -1) {
+            tabListState.animateScrollToItem(index)
+        }
+    }
+
+    val activeTab = tabs.find { it.id == activeTabId }
+    val annotations by if (activeTabId != null) {
+        viewModel.getAnnotationsForTab(activeTabId!!).collectAsState(initial = emptyList())
+    } else {
+        remember { mutableStateOf(emptyList<ContextAnnotation>()) }
+    }
+    
+    // Use the active tab ID as a key for the editor host so it swaps when tabs change
     val editorHost = rememberWEditorHost(
         initialDocument = WDocument(
-            id = initialNoteId?.toString() ?: "new",
+            id = activeTabId?.toString() ?: "new",
             blocks = kotlinx.collections.immutable.persistentListOf(
-                WTextBlock(id = "init", text = initialContent)
+                WTextBlock(id = "init", text = activeTab?.content ?: contentValue.text)
             )
-        )
+        ),
+        initialAnnotations = annotations,
+        initialSnapshot = activeTabId?.let { tabSnapshots[it] },
+        onMakeTab = { extractedText ->
+            editableNoteId?.let { noteId ->
+                scope.launch {
+                    val activeIndex = tabs.indexOfFirst { it.id == activeTabId }.takeIf { it != -1 }
+                    val generatedTitle = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.generateTabTitle(extractedText)
+                    val newId = viewModel.addTabAndReturnId(
+                        noteId = noteId, 
+                        title = generatedTitle,
+                        content = extractedText, 
+                        afterTabIndex = activeIndex
+                    )
+                    lastTabCreatedFromSelection = true
+                    activeTabId = newId
+                }
+            }
+        },
+        initialCursorAtEnd = lastTabCreatedFromSelection
     )
 
-    // Keep contentValue in sync with WEditor internal state to trigger existing auto-save logic.
+    // Reset the flag after editor is remembered (it will reset on next recomposition where editorHost is recreated)
+    SideEffect {
+        if (lastTabCreatedFromSelection) {
+            lastTabCreatedFromSelection = false
+        }
+    }
+
     val editorSnapshot by editorHost.snapshot
+    LaunchedEffect(editorSnapshot, activeTabId) {
+        activeTabId?.let { id ->
+            tabSnapshots[id] = editorSnapshot
+        }
+    }
+
+    // Persist Annotations
+    LaunchedEffect(editorSnapshot.annotations, activeTabId) {
+        activeTabId?.let { tabId ->
+            viewModel.syncAnnotations(tabId, editorSnapshot.annotations)
+        }
+    }
+    // -----------------------
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            val block = WMediaBlock(
+                id = java.util.UUID.randomUUID().toString(),
+                url = it.toString(),
+                mediaType = MediaType.Image
+            )
+            editorHost.gestureCoordinator.onCommand(WEditorCommand.InsertBlock(block))
+        }
+    }
+    
     LaunchedEffect(editorSnapshot.document.revision) {
         val mergedText = editorSnapshot.document.blocks
             .filterIsInstance<WTextContainer>()
@@ -86,19 +190,28 @@ fun NoteEditorScreen(
     val currentFolderId by rememberUpdatedState(selectedFolderId)
     val currentNoteState by rememberUpdatedState(currentNote)
     val currentEditableId by rememberUpdatedState(editableNoteId)
+    val currentTabs by rememberUpdatedState(tabs)
+    val currentTabSnapshots by rememberUpdatedState(tabSnapshots)
 
     DisposableEffect(Unit) {
         onDispose {
             val id = currentEditableId
             val note = currentNoteState
             if (id != null && note != null) {
-                val finalContent = editorHost.snapshot.value.document.blocks
-                    .filterIsInstance<WTextContainer>()
-                    .joinToString("\n") { it.text }
+                // Save all tabs from cache
+                currentTabs.forEach { tab ->
+                    val snapshot = currentTabSnapshots[tab.id]
+                    if (snapshot != null) {
+                        val finalTabContent = snapshot.document.blocks
+                            .filterIsInstance<WTextContainer>()
+                            .joinToString("\n") { it.text }
+                        viewModel.updateTab(tab.copy(content = finalTabContent))
+                    }
+                }
                 
+                // Also update the main note record
                 viewModel.updateNote(note.copy(
                     title = currentTitle.ifBlank { note.title },
-                    content = finalContent,
                     folderId = currentFolderId,
                     updatedAt = System.currentTimeMillis()
                 ))
@@ -151,18 +264,35 @@ fun NoteEditorScreen(
     }
 
     // Auto-save logic
-    LaunchedEffect(title, contentValue.text, selectedFolderId) {
+    LaunchedEffect(title, contentValue.text, selectedFolderId, activeTabId) {
         if (title.isBlank() && contentValue.text.isBlank() && editableNoteId == null) return@LaunchedEffect
-        delay(500) // Debounce save
+        delay(1000) // Debounce save
+        
         if (editableNoteId == null) {
             val newId = viewModel.createNoteAndReturnId(title, contentValue.text, selectedFolderId)
             editableNoteId = newId
             currentNote = viewModel.getNoteById(newId)
+            
+            // Auto-staple if created from a path
+            if (pathId != null) {
+                linkPathViewModel.stapleNote(newId, pathId)
+            }
         } else {
+            // Update the active tab if it exists
+            activeTab?.let { tab ->
+                val snapshot = tabSnapshots[tab.id] ?: editorHost.snapshot.value
+                val finalTabContent = snapshot.document.blocks
+                    .filterIsInstance<WTextContainer>()
+                    .joinToString("\n") { it.text }
+                
+                if (tab.content != finalTabContent) {
+                    viewModel.updateTab(tab.copy(content = finalTabContent))
+                }
+            }
+
             currentNote?.let {
                 val updated = it.copy(
                     title = title.ifBlank { it.title },
-                    content = contentValue.text,
                     folderId = selectedFolderId,
                     updatedAt = System.currentTimeMillis()
                 )
@@ -193,11 +323,11 @@ fun NoteEditorScreen(
                 actions = {
                     Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(end = 8.dp)) {
                         val folder = folders.find { it.id == selectedFolderId }
-                        FolderBadge(label = folder?.name ?: "Uncategorized", icon = "📁")
+                        FolderBadge(label = folder?.name ?: "Uncategorized", icon = Icons.Outlined.Folder)
                         
                         currentPaths.firstOrNull()?.let { path ->
                             Spacer(modifier = Modifier.height(4.dp))
-                            FolderBadge(label = path.name, icon = "📎")
+                            FolderBadge(label = path.name, icon = Icons.Outlined.Link)
                         }
                     }
                     
@@ -205,7 +335,12 @@ fun NoteEditorScreen(
                         Icon(Icons.Default.MoreVert, contentDescription = "More")
                     }
 
-                    DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
+                    DropdownMenu(
+                        expanded = showOverflowMenu,
+                        onDismissRequest = { showOverflowMenu = false },
+                        shape = com.tv.wnotes.ui.theme.ActionMenuShape
+                    ) {
+                        DropdownMenuItem(text = { Text("Add Image") }, onClick = { showOverflowMenu = false; imagePickerLauncher.launch("image/*") })
                         DropdownMenuItem(text = { Text("Add to Folder") }, onClick = { showOverflowMenu = false; showFolderSheet = true })
                         DropdownMenuItem(text = { Text("Staple") }, onClick = { showOverflowMenu = false; showPathSheet = true })
                         DropdownMenuItem(text = { Text(if (currentNote?.isStarred == true) "Unstar" else "Star") }, onClick = { currentNote?.let(viewModel::toggleStar); showOverflowMenu = false })
@@ -223,26 +358,116 @@ fun NoteEditorScreen(
             )
         },
         bottomBar = {
-            if (pathId != null && pathNotes.isNotEmpty() && editableNoteId != null) {
-                val currentIndex = pathNotes.indexOfFirst { it.id == editableNoteId }
-                if (currentIndex != -1) {
-                    BottomAppBar {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            TextButton(
-                                onClick = { onNavigateToNote(pathNotes[currentIndex - 1].id, pathId) },
-                                enabled = currentIndex > 0
-                            ) { Text("« Prev") }
-                            
-                            Text("Step ${currentIndex + 1} of ${pathNotes.size}", style = MaterialTheme.typography.labelSmall)
+            Column {
+                // Multi-Tab Bar
+                if (editableNoteId != null) {
+                    BottomTabRow(
+                        tabs = tabs,
+                        activeTabId = activeTabId,
+                        listState = tabListState,
+                        onTabSelected = { activeTabId = it },
+                        onAddTab = { 
+                            editableNoteId?.let { noteId ->
+                                scope.launch {
+                                    val activeIndex = tabs.indexOfFirst { it.id == activeTabId }.takeIf { it != -1 }
+                                    val newId = viewModel.addTabAndReturnId(noteId, afterTabIndex = activeIndex)
+                                    activeTabId = newId
+                                }
+                            }
+                        }
+                    )
+                }
 
-                            TextButton(
-                                onClick = { onNavigateToNote(pathNotes[currentIndex + 1].id, pathId) },
-                                enabled = currentIndex < pathNotes.size - 1
-                            ) { Text("Next »") }
+                // Existing Path Navigation
+                if (pathId != null && pathNotes.isNotEmpty() && editableNoteId != null) {
+                    val currentIndex = pathNotes.indexOfFirst { it.id == editableNoteId }
+                    if (currentIndex != -1) {
+                        BottomAppBar(
+                            modifier = Modifier.height(130.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp),
+                            contentPadding = PaddingValues(bottom = 12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Previous Note Group
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    TextButton(
+                                        onClick = { onNavigateToNote(pathNotes[currentIndex - 1].id, pathId) },
+                                        enabled = currentIndex > 0,
+                                        modifier = Modifier.height(40.dp)
+                                    ) { 
+                                        Text("« Prev", style = MaterialTheme.typography.labelLarge) 
+                                    }
+                                    
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    FilledTonalButton(
+                                        onClick = {
+                                            scope.launch {
+                                                val newId = viewModel.createNoteAndReturnId("", "")
+                                                linkPathViewModel.insertNoteInPath(pathId, newId, currentIndex)
+                                                delay(250) 
+                                                onNavigateToNote(newId, pathId)
+                                            }
+                                        },
+                                        modifier = Modifier.height(44.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("New", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                                
+                                // Center Progress
+                                Surface(
+                                    shape = RoundedCornerShape(20.dp),
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    modifier = Modifier.padding(bottom = 16.dp)
+                                ) {
+                                    Text(
+                                        "Step ${currentIndex + 1} of ${pathNotes.size}", 
+                                        style = MaterialTheme.typography.labelMedium,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+
+                                // Next Note Group
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    TextButton(
+                                        onClick = { onNavigateToNote(pathNotes[currentIndex + 1].id, pathId) },
+                                        enabled = currentIndex < pathNotes.size - 1,
+                                        modifier = Modifier.height(40.dp)
+                                    ) { 
+                                        Text("Next »", style = MaterialTheme.typography.labelLarge) 
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    FilledTonalButton(
+                                        onClick = {
+                                            scope.launch {
+                                                val newId = viewModel.createNoteAndReturnId("", "")
+                                                linkPathViewModel.insertNoteInPath(pathId, newId, currentIndex + 1)
+                                                delay(250)
+                                                onNavigateToNote(newId, pathId)
+                                            }
+                                        },
+                                        modifier = Modifier.height(44.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("New", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -252,54 +477,57 @@ fun NoteEditorScreen(
         Column(
             modifier = Modifier
                 .padding(padding)
-                .padding(16.dp)
                 .fillMaxSize()
         ) {
-            TextField(
-                value = title,
-                onValueChange = { title = it },
-                placeholder = { Text("Title", style = MaterialTheme.typography.headlineMedium) },
-                modifier = Modifier.fillMaxWidth(),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent
-                ),
-                textStyle = MaterialTheme.typography.headlineMedium
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
             if (useNextGenEditor) {
                 WEditor(
                     host = editorHost,
+                    title = title,
+                    onTitleChange = { title = it },
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 )
             } else {
-                DraggableTextField(
-                    value = contentValue,
-                    onValueChange = { contentValue = it },
-                    placeholder = { 
-                        Text(
-                            "Write here...", 
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                        ) 
-                    },
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    textStyle = MaterialTheme.typography.bodyLarge
-                )
+                Column(modifier = Modifier.padding(16.dp).fillMaxSize()) {
+                    TextField(
+                        value = title,
+                        onValueChange = { title = it },
+                        placeholder = { Text("Title", style = MaterialTheme.typography.headlineMedium) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent
+                        ),
+                        textStyle = MaterialTheme.typography.headlineMedium
+                    )
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                    DraggableTextField(
+                        value = contentValue,
+                        onValueChange = { contentValue = it },
+                        placeholder = { 
+                            Text(
+                                "Write here...", 
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            ) 
+                        },
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodyLarge
+                    )
+                    
+                    // Real-time word count in editor
+                    val words = if (contentValue.text.isBlank()) 0 else contentValue.text.trim().split(Regex("\\s+")).size
+                    Text(
+                        text = "$words words",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.align(Alignment.End).padding(top = 8.dp)
+                    )
+                }
             }
-            
-            // Real-time word count in editor
-            val words = if (contentValue.text.isBlank()) 0 else contentValue.text.trim().split(Regex("\\s+")).size
-            Text(
-                text = "$words words",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier.align(Alignment.End).padding(top = 8.dp)
-            )
         }
     }
 
@@ -323,7 +551,7 @@ fun NoteEditorScreen(
                 }
             },
             onCreatePath = { name, onCreated ->
-                currentNote?.let { linkPathViewModel.createStaple(name, listOf(it), onCreated) }
+                currentNote?.let { linkPathViewModel.createStaple(name, listOf(HomeItem.NoteItem(it)), onCreated) }
             }
         )
     }
@@ -341,7 +569,100 @@ fun NoteEditorScreen(
 }
 
 @Composable
-private fun FolderBadge(label: String, icon: String) {
+fun BottomTabRow(
+    tabs: List<NoteTab>,
+    activeTabId: Long?,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    onTabSelected: (Long) -> Unit,
+    onAddTab: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp),
+        shadowElevation = 8.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            LazyRow(
+                state = listState,
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(end = 8.dp)
+            ) {
+                items(tabs, key = { it.id }) { tab ->
+                    val isActive = tab.id == activeTabId
+                    TabItem(
+                        title = getEffectiveTabTitle(tab),
+                        isActive = isActive,
+                        onClick = { onTabSelected(tab.id) }
+                    )
+                }
+            }
+
+            VerticalDivider(
+                modifier = Modifier
+                    .height(24.dp)
+                    .padding(horizontal = 8.dp),
+                color = MaterialTheme.colorScheme.outlineVariant
+            )
+
+            IconButton(
+                onClick = onAddTab,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "Add Tab",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TabItem(
+    title: String,
+    isActive: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = if (isActive) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+        modifier = Modifier.height(36.dp)
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+            )
+        }
+    }
+}
+
+private fun getEffectiveTabTitle(tab: NoteTab): String {
+    if (!tab.title.isNullOrBlank()) return tab.title
+    
+    val plainText = tab.content.take(25).replace("\n", " ").trim()
+    return if (plainText.isEmpty()) "New Tab" else plainText
+}
+
+@Composable
+private fun FolderBadge(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
@@ -349,9 +670,16 @@ private fun FolderBadge(label: String, icon: String) {
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text(text = "$icon $label", style = MaterialTheme.typography.labelSmall)
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(12.dp),
+                tint = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            Text(text = label, style = MaterialTheme.typography.labelSmall)
         }
     }
 }

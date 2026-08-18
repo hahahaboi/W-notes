@@ -1,0 +1,13 @@
+- `[x]` Update `NoteViewModel` with tab management logic
+- `[x]` Implement `rebuildNoteSummary` in `NoteViewModel`
+- `[x]` Update `NoteEditorScreen` to support multiple tabs state
+    - `[x]` Add active tab ID tracking
+    - `[x]` Implement tab state cache (preserves history/cursor)
+    - `[x]` Swap `WEditorHost` on tab switch
+- `[x]` Update Autosave and Final Save to be tab-aware
+- `[x]` Verify independent history and data persistence
+- `[x]` Implement `getEffectiveTabTitle` helper
+- `[x]` Add Bottom Tab Bar UI to `NoteEditorScreen`
+- `[x]` Implement Tab switching and "+" (Add Tab) functionality
+- `[x]` Handle keyboard insets and layout for Bottom Tab Bar
+- `[x]` Verify UI and Tab navigation
