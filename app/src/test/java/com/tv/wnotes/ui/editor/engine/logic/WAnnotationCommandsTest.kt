@@ -34,6 +34,11 @@ class WAnnotationCommandsTest {
         assertEquals("Green pigment", snapshot.annotations[0].content)
         assertEquals(4, snapshot.annotations[0].startOffset)
         assertEquals(15, snapshot.annotations[0].endOffset)
+
+        // Verify selection is cleared
+        assertFalse(snapshot.selection.isActive)
+        assertEquals(15, snapshot.selection.ranges[0].focus.offset)
+        assertEquals(15, snapshot.cursor.position.offset)
     }
 
     @Test

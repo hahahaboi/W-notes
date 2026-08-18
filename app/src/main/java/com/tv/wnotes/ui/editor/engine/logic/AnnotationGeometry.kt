@@ -1,6 +1,7 @@
 package com.tv.wnotes.ui.editor.engine.logic
 
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Path
 
 /**
  * Represents the calculated on-screen geometry of a Context Annotation.
@@ -12,5 +13,6 @@ data class AnnotationGeometry(
     val boundingRect: Rect,
     val lineRects: List<Rect>,
     val startCursorRect: Rect,
-    val endCursorRect: Rect
+    val endCursorRect: Rect,
+    val outlinePath: Path? = null
 )

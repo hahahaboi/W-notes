@@ -116,7 +116,7 @@ fun NoteEditorScreen(
         initialDocument = WDocument(
             id = activeTabId?.toString() ?: "new",
             blocks = kotlinx.collections.immutable.persistentListOf(
-                WTextBlock(id = "init", text = activeTab?.content ?: contentValue.text)
+                WTextBlock(id = "init", text = activeTab?.content ?: "")
             )
         ),
         initialAnnotations = annotations,
@@ -174,16 +174,6 @@ fun NoteEditorScreen(
             editorHost.gestureCoordinator.onCommand(WEditorCommand.InsertBlock(block))
         }
     }
-    
-    LaunchedEffect(editorSnapshot.document.revision) {
-        val mergedText = editorSnapshot.document.blocks
-            .filterIsInstance<WTextContainer>()
-            .joinToString("\n") { it.text }
-        
-        if (mergedText != contentValue.text) {
-            contentValue = contentValue.copy(text = mergedText)
-        }
-    }
 
     // Final save on screen exit
     val currentTitle by rememberUpdatedState(title)
@@ -205,6 +195,9 @@ fun NoteEditorScreen(
                         val finalTabContent = snapshot.document.blocks
                             .filterIsInstance<WTextContainer>()
                             .joinToString("\n") { it.text }
+                        // Use blocking or a scope that outlives the component if possible.
+                        // Since this is in onDispose, we should ideally use a global scope or 
+                        // ensure the ViewModel scope handles it.
                         viewModel.updateTab(tab.copy(content = finalTabContent))
                     }
                 }
@@ -242,7 +235,6 @@ fun NoteEditorScreen(
                 currentNote = note
                 editableNoteId = note.id
                 title = note.title
-                contentValue = TextFieldValue(note.content)
                 selectedFolderId = note.folderId
                 
                 // Also update the next-gen editor engine if it's currently empty
@@ -264,12 +256,20 @@ fun NoteEditorScreen(
     }
 
     // Auto-save logic
-    LaunchedEffect(title, contentValue.text, selectedFolderId, activeTabId) {
-        if (title.isBlank() && contentValue.text.isBlank() && editableNoteId == null) return@LaunchedEffect
-        delay(1000) // Debounce save
+    LaunchedEffect(title, editorSnapshot.document.revision, selectedFolderId, activeTabId) {
+        val currentContent = editorSnapshot.document.blocks
+            .filterIsInstance<WTextContainer>()
+            .joinToString("\n") { it.text }
+
+        if (title.isBlank() && currentContent.isBlank() && editableNoteId == null) return@LaunchedEffect
+        
+        // Immediate save for folder/tab changes, debounced for text
+        if (title == currentNote?.title && selectedFolderId == currentNote?.folderId && activeTabId == activeTab?.id) {
+            delay(1000)
+        }
         
         if (editableNoteId == null) {
-            val newId = viewModel.createNoteAndReturnId(title, contentValue.text, selectedFolderId)
+            val newId = viewModel.createNoteAndReturnId(title, currentContent, selectedFolderId)
             editableNoteId = newId
             currentNote = viewModel.getNoteById(newId)
             
@@ -280,24 +280,21 @@ fun NoteEditorScreen(
         } else {
             // Update the active tab if it exists
             activeTab?.let { tab ->
-                val snapshot = tabSnapshots[tab.id] ?: editorHost.snapshot.value
-                val finalTabContent = snapshot.document.blocks
-                    .filterIsInstance<WTextContainer>()
-                    .joinToString("\n") { it.text }
-                
-                if (tab.content != finalTabContent) {
-                    viewModel.updateTab(tab.copy(content = finalTabContent))
+                if (tab.content != currentContent) {
+                    viewModel.updateTab(tab.copy(content = currentContent))
                 }
             }
 
             currentNote?.let {
-                val updated = it.copy(
-                    title = title.ifBlank { it.title },
-                    folderId = selectedFolderId,
-                    updatedAt = System.currentTimeMillis()
-                )
-                viewModel.updateNote(updated)
-                currentNote = updated
+                if (it.title != title || it.folderId != selectedFolderId) {
+                    val updated = it.copy(
+                        title = title.ifBlank { it.title },
+                        folderId = selectedFolderId,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    viewModel.updateNote(updated)
+                    currentNote = updated
+                }
             }
         }
     }
@@ -352,7 +349,13 @@ fun NoteEditorScreen(
                         })
                         DropdownMenuItem(text = { Text("Duplicate") }, onClick = { currentNote?.let(viewModel::duplicate); showOverflowMenu = false })
                         DropdownMenuItem(text = { Text("Rename") }, onClick = { showOverflowMenu = false; showRenameDialog = true })
-                        DropdownMenuItem(text = { Text("Share") }, onClick = { shareNote(context, currentNote, title, contentValue.text); showOverflowMenu = false })
+                        DropdownMenuItem(text = { Text("Share") }, onClick = { 
+                            val shareContent = editorSnapshot.document.blocks
+                                .filterIsInstance<WTextContainer>()
+                                .joinToString("\n") { it.text }
+                            shareNote(context, currentNote, title, shareContent)
+                            showOverflowMenu = false 
+                        })
                     }
                 }
             )

@@ -536,6 +536,11 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    suspend fun updateTabSync(tab: NoteTab) {
+        repository.updateTab(tab.copy(updatedAt = System.currentTimeMillis()))
+        rebuildNoteSummary(tab.noteId)
+    }
+
     fun deleteTab(tab: NoteTab) {
         viewModelScope.launch {
             repository.deleteTab(tab)

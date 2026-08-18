@@ -90,8 +90,21 @@ fun WEditorOverlay(
                     Box(
                         modifier = Modifier
                             .graphicsLayer {
-                                translationX = (targetX - 140.dp.toPx()).coerceAtLeast(16.dp.toPx()) // Basic centering/clamping
-                                translationY = (targetY - 120.dp.toPx()).coerceAtLeast(16.dp.toPx()) // Above text
+                                // Position popup above the text with a 8dp gap
+                                // Clamp horizontally to keep it on screen
+                                val popupWidth = 280.dp.toPx()
+                                val popupHeight = 140.dp.toPx() // Estimate
+                                
+                                translationX = (targetX - popupWidth / 2)
+                                    .coerceIn(16.dp.toPx(), size.width - popupWidth - 16.dp.toPx())
+                                
+                                val preferredY = targetY - popupHeight - 8.dp.toPx()
+                                translationY = if (preferredY < 16.dp.toPx()) {
+                                    // If too high, show below the text
+                                    geometry.boundingRect.bottom + editorOffset.y + 8.dp.toPx()
+                                } else {
+                                    preferredY
+                                }
                             }
                     ) {
                         WAnnotationPopup(

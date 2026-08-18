@@ -50,6 +50,23 @@ class WEditorHost(
             pendingAnnotationJob?.cancel()
         }
 
+        // Automatic Dismissal: Dismiss current annotation if user interacts elsewhere
+        if (snapshot.value.activeAnnotationId != null) {
+            when (command) {
+                is WEditorCommand.MoveCursor,
+                is WEditorCommand.SelectWord,
+                is WEditorCommand.SelectParagraph,
+                is WEditorCommand.BeginSelection,
+                is WEditorCommand.ClearSelection,
+                is WEditorCommand.DeleteBackward,
+                is WEditorCommand.DeleteForward,
+                is WEditorCommand.SplitBlock -> {
+                    engineState.dismissAnnotation()
+                }
+                else -> {}
+            }
+        }
+
         when (command) {
             is WEditorCommand.ShowAnnotation -> {
                 pendingAnnotationJob?.cancel()

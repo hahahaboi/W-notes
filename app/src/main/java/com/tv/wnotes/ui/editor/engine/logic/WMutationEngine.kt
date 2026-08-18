@@ -724,7 +724,9 @@ object WMutationEngine {
             content = content
         )
         val nextSnapshot = snapshot.copy(
-            annotations = (snapshot.annotations + annotation).toImmutableList()
+            annotations = (snapshot.annotations + annotation).toImmutableList(),
+            selection = WSelectionManager.collapseTo(normalized.focus),
+            cursor = snapshot.cursor.copy(position = normalized.focus, isVisible = true)
         )
         return WMutationResult.Success(nextSnapshot, WMutationType.ANNOTATE_RANGE, setOf(normalized.anchor.blockId), 0)
     }

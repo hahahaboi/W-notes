@@ -99,6 +99,7 @@ class WGestureCoordinator(
                 hit.characterIndex
             )
             if (annotation != null) {
+                onCommand(WEditorCommand.MoveCursor(point, hit.affinity))
                 onCommand(WEditorCommand.ShowAnnotation(annotation.id))
                 return
             }

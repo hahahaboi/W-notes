@@ -124,8 +124,7 @@ private fun TextBlockRenderer(
         modifier = modifier
             .onGloballyPositioned(onPositioned)
             .drawAnnotationGeometry(
-                geometries = annotationGeometries,
-                color = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                geometries = annotationGeometries
             )
     )
 }
@@ -177,8 +176,7 @@ private fun ChecklistBlockRenderer(
                 .weight(1f)
                 .onGloballyPositioned(onPositioned)
                 .drawAnnotationGeometry(
-                    geometries = annotationGeometries,
-                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                    geometries = annotationGeometries
                 )
         )
     }

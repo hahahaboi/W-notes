@@ -124,6 +124,13 @@ fun WEditor(
         }
     }
 
+    // Dismiss annotation popup on scroll
+    LaunchedEffect(scrollState.isScrollInProgress) {
+        if (scrollState.isScrollInProgress && snapshot.activeAnnotationId != null) {
+            host.dispatchCommand(WEditorCommand.DismissAnnotation)
+        }
+    }
+
     // Cursor blinking logic (Local state for better performance and reliability)
     var cursorBlinkVisible by remember { mutableStateOf(true) }
     LaunchedEffect(cursor.position, cursor.isVisible, snapshot.document.revision) {

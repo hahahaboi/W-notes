@@ -92,22 +92,23 @@ fun WEditorRenderer(
         val cursorRect = layoutState.getInsertionBeamForPoint(snapshot.cursor.position) ?: return@LaunchedEffect
         val viewportHeight = editorSize.height.toFloat()
         val margin = with(density) { 56.dp.toPx() } // Enough space to see the next/prev line
+        val currentScroll = scrollState.value.toFloat()
         
-        val cursorTop = cursorRect.top
-        val cursorBottom = cursorRect.bottom
+        val viewportRelativeTop = cursorRect.top - currentScroll
+        val viewportRelativeBottom = cursorRect.bottom - currentScroll
         
-        if (cursorTop < margin) {
-            // Cursor is near or above the top - Scroll Up
-            val scrollDelta = cursorTop - margin
+        if (viewportRelativeTop < margin) {
+            // Cursor is near or above the visible top - Scroll Up
+            val scrollDelta = viewportRelativeTop - margin
             scrollState.animateScrollTo(
-                value = (scrollState.value + scrollDelta).toInt().coerceAtLeast(0),
+                value = (currentScroll + scrollDelta).toInt().coerceAtLeast(0),
                 animationSpec = androidx.compose.animation.core.tween(durationMillis = 150)
             )
-        } else if (cursorBottom > viewportHeight - margin) {
-            // Cursor is near or below the bottom - Scroll Down
-            val scrollDelta = cursorBottom - (viewportHeight - margin)
+        } else if (viewportRelativeBottom > viewportHeight - margin) {
+            // Cursor is near or below the visible bottom - Scroll Down
+            val scrollDelta = viewportRelativeBottom - (viewportHeight - margin)
             scrollState.animateScrollTo(
-                value = (scrollState.value + scrollDelta).toInt().coerceAtMost(scrollState.maxValue),
+                value = (currentScroll + scrollDelta).toInt().coerceAtMost(scrollState.maxValue),
                 animationSpec = androidx.compose.animation.core.tween(durationMillis = 150)
             )
         }
