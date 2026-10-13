@@ -1,42 +1,48 @@
-# Implementation Plan - App Icon & "Stapled" Refactor
+# Implementation Plan - Phone Optimization & UI Bug Fixes
 
-This plan outlines the steps to set the provided image as the application icon and rename the "Link Paths" feature to "Stapled" with a paper clip emoji (📎), as part of the overall design polish.
+This plan addresses several UX and layout issues that affect the app when running on a phone, specifically focusing on touch targets, responsiveness, and gesture behavior.
+
+## User Review Required
+
+> [!IMPORTANT]
+> - **Touch Targets**: I am increasing the width of the `FocusTimerSidebar` handle to 32dp (from 12dp) and adding an invisible padding area to reach the recommended 48dp touch target width.
+> - **Gesture Changes**: Swiping on note cards will no longer require a long press. It will be a standard responsive swipe gesture.
 
 ## Proposed Changes
 
-### 1. App Icon Update
+### 1. Component Optimization
+#### [MODIFY] [FocusTimerSidebar.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/components/FocusTimerSidebar.kt)
+- Increase the handle width to make it easier to tap on phone screens.
+- Add an invisible touch expansion area to ensure it meets the 48dp accessibility guideline.
 
-Set the provided image as the application icon across all densities and formats.
+#### [MODIFY] [FloatingRoughNote.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/components/FloatingRoughNote.kt)
+- Dynamically calculate the initial position based on screen dimensions instead of hardcoded values.
+- Improve the visual design of the "collapsed" state so it's clearly identifiable as a feature and not a layout glitch.
 
-#### [MODIFY] Icon Resources (`app/src/main/res/mipmap-*`)
-- Generate and replace `ic_launcher.webp` and `ic_launcher_round.webp` for all density buckets (mdpi to xxxhdpi) using resized versions of the provided image.
+#### [MODIFY] [SwipeSelectableNoteCard.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/components/SwipeSelectableNoteCard.kt)
+- Replace `detectDragGesturesAfterLongPress` with `detectHorizontalDragGestures`. This removes the delay before swiping, making the app feel significantly more responsive on mobile.
 
-#### [MODIFY] [ic_launcher_background.xml](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/res/drawable/ic_launcher_background.xml)
-- Update the background color to match the beige tone of the new icon (`#F5F2E9`).
+#### [MODIFY] [NoteWorkspaceScreen.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/components/NoteWorkspaceScreen.kt)
+- Simplify the search placeholder text to prevent truncation or wrapping on narrow screens.
+- Adjust `GridCells.Adaptive` minimum size if necessary for better phone layouts.
 
----
+### 2. Layout & Insets
+### 3. Editor Engine Stability
+#### [MODIFY] [WHitTestEngine.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/editor/engine/logic/WHitTestEngine.kt)
+- Add vertical tolerance to `findBlockAtY`. Currently, a 1-pixel gap between blocks can cause hit-testing to fail, which is common on high-density phone screens.
+- Improve `clampToNearestBlock` to be more robust when touching the very top or bottom of the editor.
 
-### 2. Rename "Link Paths" to "Stapled"
-
-Refactor the naming and iconography for the "Link Paths" feature.
-
-#### [MODIFY] [LinkPathViewModel.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/viewmodel/LinkPathViewModel.kt) & [LinkPathRepository.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/data/repository/LinkPathRepository.kt)
-- Rename functions: `createPath` -> `createStaple`, `assignNoteToPath` -> `stapleNote`, etc.
+#### [MODIFY] [NoteEditorScreen.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/editor/NoteEditorScreen.kt)
+- Ensure the editor content handles IME (keyboard) insets correctly so the text isn't obscured when typing.
+- Add `Modifier.imePadding()` to the main editor container.
 
 #### [MODIFY] [MainActivity.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/MainActivity.kt)
-- Update Drawer: "Link Paths" -> "Stapled", 🔗 -> 📎.
-
-#### [MODIFY] [HomeScreen.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/home/HomeScreen.kt) & [NoteEditorScreen.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/editor/NoteEditorScreen.kt)
-- Update menus and badges: "Add to Link Path" -> "Staple Note", 🔗 -> 📎.
-
-#### [MODIFY] [LinkPathsScreen.kt](file:///Users/Lahari/AndroidStudioProjects/Wnotes/app/src/main/java/com/tv/wnotes/ui/paths/LinkPathsScreen.kt)
-- Rename titles and headers to "Stapled".
+- Ensure the status bar icons adapt to the theme (light/dark) for better legibility on phone.
 
 ## Verification Plan
 
-### Automated Tests
-- Run `./gradlew assembleDebug` to ensure compilation and resource integrity.
-
 ### Manual Verification
-- Verify the new icon appears on the device home screen.
-- Verify the Navigation Drawer and Note menus show "Stapled" with the 📎 emoji.
+- **Touch Targets**: Verify the Focus Timer handle is easy to open with a finger.
+- **Gestures**: Verify swiping on note cards is instant and smooth.
+- **Keyboard**: Open the editor, type a long note, and verify the screen remains usable when the keyboard is up.
+- **Rough Note**: Drag the rough note and verify it doesn't jump to weird positions on first launch.

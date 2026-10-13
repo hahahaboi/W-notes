@@ -19,7 +19,6 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.unit.dp
 import com.tv.wnotes.ui.editor.engine.input.WShortcut
 import com.tv.wnotes.ui.editor.engine.logic.WEditorCommand
 import com.tv.wnotes.ui.editor.engine.logic.NavigationDirection
@@ -34,12 +33,16 @@ import com.tv.wnotes.ui.editor.engine.logic.NavigationDirection
 fun WEditorInputLayer(
     host: WEditorHost,
     focusRequester: FocusRequester,
+    modifier: Modifier = Modifier,
     onPlaced: () -> Unit = {},
-    modifier: Modifier = Modifier
 ) {
     // Hidden buffer: Two spaces to provide a reliable context for keyboards
     val emptyBuffer = "  "
     var textFieldValue by remember { mutableStateOf(TextFieldValue(emptyBuffer, selection = androidx.compose.ui.text.TextRange(1))) }
+    
+    // Track last input to prevent double-typing from some IMEs that send both KeyEvents and commitText
+    var lastInsertedText by remember { mutableStateOf("") }
+    var lastInsertedTime by remember { mutableLongStateOf(0L) }
 
     val responder = remember {
         object : BringIntoViewResponder {
@@ -67,20 +70,28 @@ fun WEditorInputLayer(
         BasicTextField(
             value = textFieldValue,
             onValueChange = { newValue ->
-                if (newValue.text.length > textFieldValue.text.length) {
-                    // For Stage 13 robustness, we take the last added character or the diff
-                    val inserted = if (newValue.text.startsWith(emptyBuffer)) {
-                        newValue.text.substring(emptyBuffer.length)
-                    } else if (newValue.text.length > 1) {
-                         newValue.text.substring(1, newValue.text.length - (emptyBuffer.length - 1))
-                    } else {
-                        newValue.text.filterIndexed { i, c -> i >= emptyBuffer.length || c != emptyBuffer[i] }
+                val newText = newValue.text
+                val oldText = textFieldValue.text
+
+                if (newText.length > oldText.length) {
+                    // Robust extraction: remove all characters of the old text 
+                    // from the new text to find exactly what was added.
+                    val addedList = newText.toMutableList()
+                    for (char in oldText) {
+                        addedList.remove(char)
                     }
+                    val inserted = addedList.joinToString("")
                     
                     if (inserted.isNotEmpty()) {
-                        host.inputController.onCommitText(inserted)
+                        val now = System.currentTimeMillis()
+                        // If we see the same text inserted twice within 50ms, it's likely a duplicate from the IME
+                        if ((inserted != lastInsertedText) || ((now - lastInsertedTime) > 50)) {
+                            host.inputController.onCommitText(inserted)
+                            lastInsertedText = inserted
+                            lastInsertedTime = now
+                        }
                     }
-                } else if (newValue.text.length < textFieldValue.text.length) {
+                } else if (newText.length < oldText.length) {
                     host.inputController.onDeleteBackward()
                 }
                 
@@ -92,8 +103,13 @@ fun WEditorInputLayer(
                 .onPlaced { _ -> onPlaced() }
                 .onKeyEvent { keyEvent ->
                     if (keyEvent.type == KeyEventType.KeyDown) {
-                        handleHardwareKey(keyEvent, host)
-                    } else false
+                    handleHardwareKey(keyEvent, host) { inserted ->
+                        val now = System.currentTimeMillis()
+                        host.inputController.onCommitText(inserted)
+                        lastInsertedText = inserted
+                        lastInsertedTime = now
+                    }
+                } else false
                 },
             keyboardOptions = KeyboardOptions(
                 autoCorrectEnabled = false,
@@ -105,10 +121,34 @@ fun WEditorInputLayer(
     }
 }
 
-private fun handleHardwareKey(event: KeyEvent, host: WEditorHost): Boolean {
+private fun handleHardwareKey(
+    event: KeyEvent,
+    host: WEditorHost,
+    onTextHandled: (String) -> Unit
+): Boolean {
     val isCtrl = event.isCtrlPressed
     val isShift = event.isShiftPressed
     val layoutProvider = host.gestureCoordinator.layoutProvider
+
+    // Handle Numeric Keys to avoid double-typing on some devices/IMEs
+    val digit = when (event.key) {
+        Key.Zero, Key.NumPad0 -> "0"
+        Key.One, Key.NumPad1 -> "1"
+        Key.Two, Key.NumPad2 -> "2"
+        Key.Three, Key.NumPad3 -> "3"
+        Key.Four, Key.NumPad4 -> "4"
+        Key.Five, Key.NumPad5 -> "5"
+        Key.Six, Key.NumPad6 -> "6"
+        Key.Seven, Key.NumPad7 -> "7"
+        Key.Eight, Key.NumPad8 -> "8"
+        Key.Nine, Key.NumPad9 -> "9"
+        else -> null
+    }
+
+    if ((digit != null) && !isCtrl) {
+        onTextHandled(digit)
+        return true
+    }
 
     return when (event.key) {
         Key.Z -> {

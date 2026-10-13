@@ -3,6 +3,7 @@ package com.tv.wnotes.ui.components
 import androidx.compose.animation.*
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -49,41 +50,53 @@ fun FocusTimerSidebar(viewModel: SessionViewModel) {
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(24.dp),
                         tonalElevation = 4.dp,
-                        modifier = Modifier.padding(bottom = 8.dp)
+                        modifier = Modifier
+                            .padding(bottom = 8.dp)
+                            .heightIn(max = 300.dp) // Constrain height to enable scrolling
                     ) {
-                        Column(
-                            modifier = Modifier.padding(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            TimerOption("10 sec", 10 * 1000L) {
-                                viewModel.startTimer(it)
-                                expanded = false
-                            }
-                            TimerOption("5 min", 5 * 60 * 1000L) {
-                                viewModel.startTimer(it)
-                                expanded = false
-                            }
-                            TimerOption("15 min", 15 * 60 * 1000L) {
-                                viewModel.startTimer(it)
-                                expanded = false
-                            }
-                            TimerOption("30 min", 30 * 60 * 1000L) {
-                                viewModel.startTimer(it)
-                                expanded = false
-                            }
-                            TimerOption("45 min", 45 * 60 * 1000L) {
-                                viewModel.startTimer(it)
-                                expanded = false
-                            }
-                            TimerOption("60 min", 60 * 60 * 1000L) {
-                                viewModel.startTimer(it)
-                                expanded = false
-                            }
-                            if (isTimerRunning) {
-                                TextButton(onClick = { viewModel.cancelTimer(); expanded = false }) {
-                                    Text("Cancel", color = MaterialTheme.colorScheme.error)
+                        val timerScrollState = androidx.compose.foundation.rememberScrollState()
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier
+                                    .padding(8.dp)
+                                    .verticalScroll(timerScrollState),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                TimerOption("10 sec", 10 * 1000L) {
+                                    viewModel.startTimer(it)
+                                    expanded = false
+                                }
+                                TimerOption("5 min", 5 * 60 * 1000L) {
+                                    viewModel.startTimer(it)
+                                    expanded = false
+                                }
+                                TimerOption("15 min", 15 * 60 * 1000L) {
+                                    viewModel.startTimer(it)
+                                    expanded = false
+                                }
+                                TimerOption("30 min", 30 * 60 * 1000L) {
+                                    viewModel.startTimer(it)
+                                    expanded = false
+                                }
+                                TimerOption("45 min", 45 * 60 * 1000L) {
+                                    viewModel.startTimer(it)
+                                    expanded = false
+                                }
+                                TimerOption("60 min", 60 * 60 * 1000L) {
+                                    viewModel.startTimer(it)
+                                    expanded = false
+                                }
+                                if (isTimerRunning) {
+                                    TextButton(onClick = { viewModel.cancelTimer(); expanded = false }) {
+                                        Text("Cancel", color = MaterialTheme.colorScheme.error)
+                                    }
                                 }
                             }
+
+                            WScrollbar(
+                                scrollState = timerScrollState,
+                                modifier = Modifier.align(Alignment.CenterEnd)
+                            )
                         }
                     }
                 }

@@ -1,0 +1,10 @@
+- [x] Define styling constants in `WEditorOverlay.kt`
+- [x] Implement state management for toolbar position and dropdown expansion
+- [x] Create basic pill-shaped `MultiSelectionToolbar` structure
+- [x] Add primary actions (Cut, Copy, Paste, Italic, Bold, Chevron)
+- [x] Implement the L-shaped dropdown menu
+- [x] Add secondary actions (Add Selection, Move to New Tab, Add Context)
+- [x] Implement dragging logic and viewport clamping
+- [x] Verify actions and gesture conflicts
+- [x] Final visual polish and build check
+- [ ] Add scrim to dismiss dropdown without clearing selection

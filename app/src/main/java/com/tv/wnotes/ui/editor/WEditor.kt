@@ -6,17 +6,28 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tv.wnotes.ui.editor.engine.renderer.WLayoutState
+import com.tv.wnotes.ui.editor.engine.renderer.selectionPathOrNull
 import com.tv.wnotes.ui.editor.engine.state.WDragPhase
 import com.tv.wnotes.ui.editor.engine.logic.WEditorCommand
 import com.tv.wnotes.ui.editor.engine.renderer.WDragAnimationController
 import com.tv.wnotes.ui.editor.engine.logic.WDragInternalState
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.animation.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.*
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Root composable of the next-generation editor.
@@ -24,23 +35,27 @@ import androidx.compose.ui.focus.FocusRequester
 @Composable
 fun WEditor(
     host: WEditorHost,
+    title: String,
+    onTitleChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val snapshot by host.snapshot
     val layoutState = remember { WLayoutState() }
+    val scrollState = host.verticalScrollState
     val scope = rememberCoroutineScope()
     val animController = remember { WDragAnimationController(scope) }
     val focusRequester = remember { FocusRequester() }
-    val density = androidx.compose.ui.platform.LocalDensity.current.density
+    val density = androidx.compose.ui.platform.LocalDensity.current
     
     // Sync density with layout state
     SideEffect {
-        layoutState.density = density
+        layoutState.density = density.density
     }
     
     var gestureText by remember { mutableStateOf("Gesture: IDLE") }
     var editorCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    var isInputLayerPlaced by remember { mutableStateOf(false) }
+    var contentRelativeOffset by remember { mutableStateOf(Offset.Zero) }
+    var isInputLayerPlaced by remember { mutableStateOf(value = false) }
     
     // Toggle this to show/hide the telemetry overlay for debugging
     val showTelemetry = false
@@ -48,7 +63,7 @@ fun WEditor(
     // Auto-focus when the input layer is actually placed in the layout.
     // This avoids "BringIntoViewRequester to not be used before parents are placed" crash.
     LaunchedEffect(isInputLayerPlaced, editorCoordinates) {
-        if (isInputLayerPlaced && editorCoordinates != null) {
+        if ((isInputLayerPlaced) && (editorCoordinates != null)) {
             // Wait for at least one frame to ensure the placement is committed.
             kotlinx.coroutines.yield()
             try {
@@ -70,14 +85,10 @@ fun WEditor(
     val selection = snapshot.selection
     val drag = snapshot.drag
 
-    // Sync layout state immediately for hit-testing accuracy
-    layoutState.currentSelection = selection
-    layoutState.currentBlocks = snapshot.document.blocks
-
     // Sync animation controller with drag phase changes
     LaunchedEffect(drag.phase) {
         val internalState = when(drag.phase) {
-            WDragPhase.IDLE -> WDragInternalState.Idle
+            WDragPhase.IDLE, WDragPhase.COPY_ARMED -> WDragInternalState.Idle
             WDragPhase.PREPARING_LIFT -> WDragInternalState.PreparingLift
             WDragPhase.LIFTING -> WDragInternalState.Lifting
             WDragPhase.DRAGGING -> WDragInternalState.Dragging
@@ -87,9 +98,19 @@ fun WEditor(
         animController.onDragStateChanged(internalState)
     }
 
+    val currentDensity = androidx.compose.ui.platform.LocalDensity.current.density
+
+    // Sync state for hit-testing accuracy - Use SideEffect to avoid lag in touch processing
+    SideEffect {
+        layoutState.currentSelection = selection
+        layoutState.currentBlocks = snapshot.document.blocks
+        layoutState.updateAnnotations(snapshot.annotations)
+        layoutState.density = currentDensity
+    }
+
     // Update drag position in anim controller
     LaunchedEffect(drag.fingerPosition) {
-        if (drag.fingerPosition != androidx.compose.ui.geometry.Offset.Unspecified) {
+        if (drag.fingerPosition != Offset.Unspecified) {
             animController.updateDragPosition(drag.fingerPosition)
         }
     }
@@ -104,17 +125,104 @@ fun WEditor(
         }
     }
 
+    // Sync physical handle positions with layout - DOCUMENT LOCAL
+    // We remove scrollState.value to avoid expensive ViewModel updates during scroll
+    LaunchedEffect(selection, editorCoordinates, snapshot.document.revision) {
+        if (selection.isActive) {
+            val (start, end) = com.tv.wnotes.ui.editor.engine.logic.WSelectionHandleManager.calculateHandlePositions(snapshot, layoutState)
+            host.engineState.updateHandlePositions(start, end)
+        }
+    }
+
+    // Dismiss annotation popup on scroll
+    LaunchedEffect(scrollState.isScrollInProgress) {
+        if (scrollState.isScrollInProgress && (snapshot.activeAnnotationId != null)) {
+            host.dispatchCommand(WEditorCommand.DismissAnnotation)
+        }
+    }
+
     // Cursor blinking logic (Local state for better performance and reliability)
-    var cursorBlinkVisible by remember { mutableStateOf(true) }
+    var cursorBlinkVisible by remember { mutableStateOf(value = true) }
     LaunchedEffect(cursor.position, cursor.isVisible, snapshot.document.revision) {
         if (cursor.isVisible) {
             cursorBlinkVisible = true
             while (true) {
-                kotlinx.coroutines.delay(500)
+                kotlinx.coroutines.delay(500.milliseconds)
                 cursorBlinkVisible = !cursorBlinkVisible
             }
         } else {
             cursorBlinkVisible = false
+        }
+    }
+
+    // Navigation Scrolling Logic
+    LaunchedEffect(snapshot.navigationHighlightRange, snapshot.document.revision) {
+        val range = snapshot.navigationHighlightRange ?: return@LaunchedEffect
+        
+        // Wait a frame for layout to settle
+        kotlinx.coroutines.yield()
+        
+        val viewportHeight = editorCoordinates?.size?.height ?: 0
+        if (viewportHeight <= 0) return@LaunchedEffect
+
+        val margin = with(density) { 60.dp.toPx() }
+        val currentScroll = scrollState.value.toFloat()
+
+        val blocks = snapshot.document.blocks
+        var minTop = Float.MAX_VALUE
+        var maxBottom = Float.MIN_VALUE
+
+        if (range.anchor.blockId == "W_NOTE_TITLE") {
+            val layout = layoutState.titleLayoutResult
+            if (layout != null) {
+                val start = range.anchor.offset
+                val end = range.focus.offset
+                layout.selectionPathOrNull(start, end)?.let { path ->
+                    val bounds = path.getBounds()
+                    minTop = bounds.top + layoutState.titleOffset.y
+                    maxBottom = bounds.bottom + layoutState.titleOffset.y
+                }
+            }
+        } else {
+            val startBlockIdx = blocks.indexOfFirst { it.id == range.anchor.blockId }
+            val endBlockIdx = blocks.indexOfFirst { it.id == range.focus.blockId }
+            
+            if (startBlockIdx != -1 && endBlockIdx != -1) {
+                for (i in startBlockIdx..endBlockIdx) {
+                    val blockId = blocks[i].id
+                    val blockOffset = layoutState.blockOffsets[blockId] ?: continue
+                    val layout = layoutState.layoutResults[blockId] ?: continue
+                    
+                    val start = if (i == startBlockIdx) range.anchor.offset else 0
+                    val end = if (i == endBlockIdx) range.focus.offset else layout.layoutInput.text.length
+                    
+                    layout.selectionPathOrNull(start, end)?.let { path ->
+                        val bounds = path.getBounds()
+                        minTop = minOf(minTop, bounds.top + blockOffset.y)
+                        maxBottom = maxOf(maxBottom, bounds.bottom + blockOffset.y)
+                    }
+                }
+            }
+        }
+        
+        if (minTop != Float.MAX_VALUE) {
+            val targetHeight = maxBottom - minTop
+            val isFullyVisible = minTop >= currentScroll + margin && maxBottom <= currentScroll + viewportHeight - margin
+            
+            if (!isFullyVisible) {
+                val targetScroll = if (targetHeight > viewportHeight - 2 * margin) {
+                    // Range is larger than viewport, just scroll to top of range with margin
+                    minTop - margin
+                } else {
+                    // Center the range in the viewport
+                    minTop + targetHeight / 2f - viewportHeight / 2f
+                }
+                
+                scrollState.animateScrollTo(
+                    targetScroll.toInt().coerceIn(0, scrollState.maxValue),
+                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 400)
+                )
+            }
         }
     }
 
@@ -123,43 +231,89 @@ fun WEditor(
             .fillMaxSize()
             .onGloballyPositioned { editorCoordinates = it }
     ) {
-        if (editorCoordinates != null) {
-            // 3. Input Layer (Hidden Proxy) - Zero-sized and below gestures
-            // Moved inside the if-block to ensure it is only placed when parent coordinates are ready.
-            WEditorInputLayer(
-                host = host,
-                focusRequester = focusRequester,
-                onPlaced = { isInputLayerPlaced = true }
-            )
+        Row(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            ) {
+                if (editorCoordinates != null) {
+                    // 3. Input Layer (Hidden Proxy) - Zero-sized and below gestures
+                    // Moved inside the if-block to ensure it is only placed when parent coordinates are ready.
+                    WEditorInputLayer(
+                        host = host,
+                        focusRequester = focusRequester
+                    ) { isInputLayerPlaced = true }
 
-            // 1. Content Surface
-            WEditorSurface(
-                snapshot = snapshot,
-                layoutState = layoutState,
-                editorCoordinates = editorCoordinates,
-                animController = animController,
-                cursorBlinkVisible = cursorBlinkVisible,
-                modifier = Modifier.fillMaxSize()
-            )
+                    // 1. Content Surface
+                    WEditorSurface(
+                        snapshot = snapshot,
+                        layoutState = layoutState,
+                        editorCoordinates = editorCoordinates,
+                        animController = animController,
+                        cursorBlinkVisible = cursorBlinkVisible,
+                        scrollState = scrollState,
+                        title = title,
+                        onTitleChange = onTitleChange,
+                        gestureCoordinator = host.gestureCoordinator,
+                        focusRequester = focusRequester,
+                        onGestureDetected = { gestureText = it },
+                        onCaretRendered = {
+                            host.engineState.updateTelemetry { it.copy(currentStage = 6, dropCaretVisible = true) }
+                        },
+                        onContentPositioned = { contentRelativeOffset = it },
+                        modifier = Modifier.fillMaxSize()
+                    )
 
-            // 2. Interaction Overlay (Caret, Handles)
-            WEditorOverlay(
-                snapshot = snapshot,
-                animController = animController,
-                onCaretRendered = {
-                    host.engineState.updateTelemetry { it.copy(currentStage = 6, dropCaretVisible = true) }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+                    // 2. Interaction Overlay (Drag Preview, Multi-Selection Toolbar)
+                    // Stays on top to allow toolbar clicks
+                    WEditorOverlay(
+                        snapshot = snapshot,
+                        layoutState = layoutState,
+                        animController = animController,
+                        onCommand = { host.gestureCoordinator.onCommand(it) },
+                        contentRelativeOffset = { contentRelativeOffset },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    
+                    // Sidebar Toggle Button (Arrow)
+                    IconButton(
+                        onClick = { host.dispatchCommand(WEditorCommand.ToggleMarkerSidebar) },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 8.dp, end = 8.dp)
+                            .size(32.dp)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                            .semantics { 
+                                contentDescription = if (snapshot.isMarkerSidebarOpen) "Close marker sidebar" else "Open marker sidebar"
+                            }
+                    ) {
+                        Icon(
+                            imageVector = if (snapshot.isMarkerSidebarOpen) Icons.AutoMirrored.Filled.KeyboardArrowRight else Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
 
-            // 4. Gesture Layer (Pointer Ownership) - TOPMOST
-            WEditorGestureLayer(
-                coordinator = host.gestureCoordinator,
-                selectionState = selection,
-                dragPhase = drag.phase,
-                focusRequester = focusRequester,
-                onGestureDetected = { gestureText = it },
-                modifier = Modifier.fillMaxSize()
+            androidx.compose.animation.AnimatedVisibility(
+                visible = snapshot.isMarkerSidebarOpen,
+                enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+                exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut()
+            ) {
+                WMarkerSidebar(
+                    snapshot = snapshot,
+                    onCommand = { host.dispatchCommand(it) },
+                    modifier = Modifier.fillMaxHeight()
+                )
+            }
+
+            // 5. Scrollbar Layer - Fixed at the extreme right
+            com.tv.wnotes.ui.components.WScrollbar(
+                scrollState = scrollState,
+                modifier = Modifier.fillMaxHeight()
             )
         }
 
@@ -180,14 +334,14 @@ fun WEditor(
                 DebugRow("Current Stage", tel.currentStage.toString())
                 DebugRow("Pointer Pos", "${tel.pointerPosition.x.toInt()}, ${tel.pointerPosition.y.toInt()}")
                 DebugRow("Drag Phase", tel.dragPhase.toString())
-                
+
                 Spacer(Modifier.height(4.dp))
                 Text("HIT TEST", color = Color.Cyan, fontSize = 9.sp)
                 DebugRow("Result", tel.hitTestResult)
                 DebugRow("Hover Block", tel.hoverBlock.take(8))
                 DebugRow("Hover Line", tel.hoverLine.toString())
                 DebugRow("Hover Offset", tel.hoverOffset.toString())
-                
+
                 Spacer(Modifier.height(4.dp))
                 Text("DROP CARET", color = Color.Green, fontSize = 9.sp)
                 DebugRow("Visible", tel.dropCaretVisible.toString())
@@ -195,12 +349,12 @@ fun WEditor(
                 DebugRow("Valid Target", tel.dropValid.toString())
                 DebugRow("Virtual Lines", tel.virtualLineCount.toString())
                 DebugRow("Is Virtual", tel.isVirtual.toString())
-                
+
                 Spacer(Modifier.height(4.dp))
                 Text("LIFECYCLE", color = Color.Magenta, fontSize = 9.sp)
                 DebugRow("Move Pending", tel.moveRangePending.toString())
                 DebugRow("Move Success", tel.moveRangeSuccess.toString())
-                
+
                 if (tel.failureReason != null) {
                     Spacer(Modifier.height(4.dp))
                     Text("FAILURE: ${tel.failureReason}", color = Color.Red, fontSize = 9.sp)

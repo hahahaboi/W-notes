@@ -1,0 +1,11 @@
+- [ ] Fix Tab Persistence and Saving in `NoteEditorScreen.kt`
+    - [ ] Refactor `GetOrCreateHost` to initialize immediately in composition
+    - [ ] Add `key(tab.id)` to tab processing loop for stability
+    - [ ] Improve per-tab auto-save logic with better debouncing
+    - [ ] Ensure `activeTabId` remains stable during data transitions
+- [ ] Implement Continuous Sliding Multi-Note Workspace in `StackedTabsWorkspace.kt`
+    - [ ] Implement gapless connected geometry (A.right = B.left)
+    - [ ] Implement dynamic bell-curve resizing based on viewport center
+    - [ ] Add directional sliding overlap (incoming slides over receding)
+    - [ ] Implement dynamic Z-ordering based on scroll direction
+- [ ] Final visual polishing and verification

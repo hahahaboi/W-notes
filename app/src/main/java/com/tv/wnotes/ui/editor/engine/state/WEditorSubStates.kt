@@ -9,15 +9,22 @@ import com.tv.wnotes.ui.editor.engine.logic.CursorAffinity
 @Immutable
 data class WSelectionState(
     val ranges: List<WSelectionRange> = emptyList(),
+    val activeRangeId: String? = null,
+    val interactionMode: WSelectionInteraction = WSelectionInteraction.NORMAL,
     val isActive: Boolean = false,
-    val mode: WSelectionMode = WSelectionMode.NONE,
+    val depth: WSelectionDepth = WSelectionDepth.NONE,
     val composingRange: WSelectionRange? = null,
     val startHandle: WSelectionHandleState = WSelectionHandleState(WSelectionHandleType.START),
     val endHandle: WSelectionHandleState = WSelectionHandleState(WSelectionHandleType.END),
-    val activeHandle: WSelectionHandleType? = null
+    val activeHandle: WSelectionHandleType? = null,
 )
 
-enum class WSelectionMode {
+enum class WSelectionInteraction {
+    NORMAL,
+    ADD_RANGE
+}
+
+enum class WSelectionDepth {
     NONE,
     CHARACTER,
     WORD,
@@ -27,7 +34,22 @@ enum class WSelectionMode {
 @Immutable
 data class WSelectionRange(
     val anchor: WSelectionPoint,
-    val focus: WSelectionPoint
+    val focus: WSelectionPoint,
+    val id: String = java.util.UUID.randomUUID().toString()
+)
+
+@Immutable
+data class TabTie(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val sourceTabId: Long,
+    val destinationTabId: Long,
+    val sourceBlockId: String,
+    val sourceStartOffset: Int,
+    val sourceEndOffset: Int,
+    val destinationBlockId: String,
+    val destinationStartOffset: Int,
+    val anchorText: String,
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 @Immutable
@@ -47,6 +69,7 @@ data class WCursorState(
 
 enum class WDragPhase {
     IDLE,
+    COPY_ARMED,
     PREPARING_LIFT,
     LIFTING,
     DRAGGING,
@@ -105,12 +128,13 @@ data class WTelemetryState(
 @Immutable
 data class WDragState(
     val phase: WDragPhase = WDragPhase.IDLE,
-    val selectedRange: WSelectionRange? = null,
+    val selectedRanges: List<WSelectionRange> = emptyList(),
     val fingerPosition: Offset = Offset.Unspecified,
     val liftProgress: Float = 0f,
     val previewOffset: Offset = Offset.Zero,
     val preview: WDragPreviewState = WDragPreviewState(),
-    val insertionCaret: WInsertionCaretState = WInsertionCaretState()
+    val insertionCaret: WInsertionCaretState = WInsertionCaretState(),
+    val isCopy: Boolean = false
 )
 
 @Immutable
@@ -128,6 +152,8 @@ data class WClipboardState(
 @Immutable
 data class WEditorSettings(
     val fontSize: Int = 16,
+    val fontFamily: String = "Default",
     val lineSpacing: Float = 1.2f,
-    val showLineNumbers: Boolean = false
+    val showLineNumbers: Boolean = false,
+    val zoom: Float = 1.0f
 )

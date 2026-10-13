@@ -51,12 +51,17 @@ object WHitTestEngine {
             CursorAffinity.AFTER
         }
 
+        val lineRight = layout.getLineRight(lineIndex)
+        val lineLeft = layout.getLineLeft(lineIndex)
+        val isOnText = !isBelow && localX >= lineLeft && localX <= lineRight
+
         return WHitResult(
             blockId = targetBlock.blockId,
             characterIndex = characterIndex,
             lineIndex = lineIndex,
             affinity = affinity,
-            isBelowDocument = isBelow
+            isBelowDocument = isBelow,
+            isOnText = isOnText
         )
     }
 

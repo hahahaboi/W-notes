@@ -35,9 +35,10 @@ fun FoldersScreen(
     onBack: () -> Unit,
     onFolderClick: (Long, String) -> Unit,
     onOpenDrawer: () -> Unit,
-    onViewNotes: (Long, String) -> Unit
+    drawerProgress: Float
 ) {
     val allFolders by viewModel.allFolders.collectAsState()
+    val folderStats by viewModel.folderStats.collectAsState()
     
     val folders = remember(allFolders, parentId) {
         allFolders.filter { it.parentFolderId == parentId }
@@ -48,6 +49,8 @@ fun FoldersScreen(
     var searchQuery by remember { mutableStateOf("") }
     val selectedFolderIds by viewModel.selectedFolderIds.collectAsState()
     var contextMenuFolderId by remember { mutableStateOf<Long?>(null) }
+    var showRenameFolderDialog by remember { mutableStateOf<com.tv.wnotes.data.local.entity.Folder?>(null) }
+    val listState = rememberSaveable(saver = androidx.compose.foundation.lazy.LazyListState.Saver) { androidx.compose.foundation.lazy.LazyListState() }
 
     val filteredFolders = remember(folders, searchQuery) {
         if (searchQuery.isBlank()) folders
@@ -58,6 +61,9 @@ fun FoldersScreen(
     val selectedFolders = remember(allFolders, selectedFolderIds) {
         allFolders.filter { it.id in selectedFolderIds }
     }
+    
+    var openingFolderId by remember { mutableStateOf<Long?>(null) }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -65,7 +71,7 @@ fun FoldersScreen(
                 title = {
                     Text(
                         text = if (selectedFolderIds.isEmpty()) {
-                            if (parentId == null) "Folders" else "Subfolders"
+                            "Folders"
                         } else "${selectedFolderIds.size} selected",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
@@ -87,7 +93,11 @@ fun FoldersScreen(
                         } else if (parentId != null) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         } else {
-                            Icon(Icons.Default.Menu, contentDescription = "Menu")
+                            com.tv.wnotes.ui.components.WAnimatedIcon(
+                                progress = drawerProgress,
+                                modifier = Modifier.size(24.dp),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
                         }
                     }
                 },
@@ -131,72 +141,86 @@ fun FoldersScreen(
                     Text(if (searchQuery.isEmpty()) "No folders yet" else "No matching folders found")
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(filteredFolders, key = { it.id }) { folder ->
-                        val notes by viewModel.getNotesInFolder(folder.id).collectAsState(initial = emptyList())
-                        val isSelected = folder.id in selectedFolderIds
+                Box(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(filteredFolders, key = { it.id }) { folder ->
+                            val items by viewModel.getItemsInFolder(folder.id).collectAsState(initial = emptyList())
+                            val stats = folderStats[folder.id]
 
-                        Box {
-                            FolderPreviewCard(
-                                folder = folder,
-                                notes = notes,
-                                onClick = {
-                                    if (selectedFolderIds.isNotEmpty()) {
-                                        viewModel.toggleSelection(folder.id)
-                                    } else {
-                                        onFolderClick(folder.id, folder.name)
+                            Box {
+                                FolderPreviewCard(
+                                    folder = folder,
+                                    items = items,
+                                    subfolderCount = stats?.subfolderCount ?: 0,
+                                    isOpen = openingFolderId == folder.id,
+                                    onClick = {
+                                        if (selectedFolderIds.isNotEmpty()) {
+                                            viewModel.toggleSelection(folder.id)
+                                        } else if (openingFolderId == null) {
+                                            openingFolderId = folder.id
+                                            scope.launch {
+                                                kotlinx.coroutines.delay(600)
+                                                onFolderClick(folder.id, folder.name)
+                                                openingFolderId = null
+                                            }
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (selectedFolderIds.isEmpty()) {
+                                            viewModel.toggleSelection(folder.id)
+                                            contextMenuFolderId = folder.id
+                                        } else {
+                                            viewModel.toggleSelection(folder.id)
+                                        }
                                     }
-                                },
-                                onLongClick = {
-                                    if (selectedFolderIds.isEmpty()) {
-                                        viewModel.toggleSelection(folder.id)
-                                        contextMenuFolderId = folder.id
-                                    } else {
-                                        viewModel.toggleSelection(folder.id)
-                                    }
-                                },
-                                containerColor = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
-                            )
+                                )
 
-                            DropdownMenu(
-                                expanded = contextMenuFolderId == folder.id,
-                                onDismissRequest = { contextMenuFolderId = null }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("View Notes") },
-                                    onClick = {
-                                        onViewNotes(folder.id, folder.name)
-                                        contextMenuFolderId = null
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Select") },
-                                    onClick = {
-                                        viewModel.toggleSelection(folder.id)
-                                        contextMenuFolderId = null
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Move to Folder") },
-                                    onClick = {
-                                        showFolderAssignmentSheet = true
-                                        contextMenuFolderId = null
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Delete") },
-                                    onClick = {
-                                        viewModel.deleteFolder(folder)
-                                        contextMenuFolderId = null
-                                    }
-                                )
+                                DropdownMenu(
+                                    expanded = contextMenuFolderId == folder.id,
+                                    onDismissRequest = { contextMenuFolderId = null }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Rename") },
+                                        onClick = {
+                                            showRenameFolderDialog = folder
+                                            contextMenuFolderId = null
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Select") },
+                                        onClick = {
+                                            viewModel.toggleSelection(folder.id)
+                                            contextMenuFolderId = null
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Move to Folder") },
+                                        onClick = {
+                                            showFolderAssignmentSheet = true
+                                            contextMenuFolderId = null
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Delete") },
+                                        onClick = {
+                                            viewModel.deleteFolder(folder)
+                                            contextMenuFolderId = null
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
+
+                    com.tv.wnotes.ui.components.WScrollbar(
+                        listState = listState,
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                    )
                 }
             }
         }
@@ -239,6 +263,37 @@ fun FoldersScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = { showAddDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (showRenameFolderDialog != null) {
+            var value by remember { mutableStateOf(showRenameFolderDialog!!.name) }
+            AlertDialog(
+                onDismissRequest = { showRenameFolderDialog = null },
+                title = { Text("Rename Folder") },
+                text = {
+                    OutlinedTextField(
+                        value = value,
+                        onValueChange = { value = it },
+                        placeholder = { Text("Folder name") },
+                        singleLine = true
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        if (value.isNotBlank()) {
+                            viewModel.renameFolder(showRenameFolderDialog!!, value.trim())
+                            showRenameFolderDialog = null
+                        }
+                    }) {
+                        Text("Rename")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRenameFolderDialog = null }) {
                         Text("Cancel")
                     }
                 }

@@ -3,7 +3,6 @@ package com.tv.wnotes.ui.editor.engine.input
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import com.tv.wnotes.ui.editor.engine.clipboard.WClipboardManager
-import com.tv.wnotes.ui.editor.engine.logic.WContentManager
 import com.tv.wnotes.ui.editor.engine.logic.WHistoryManager
 import com.tv.wnotes.ui.editor.engine.logic.WLayoutProvider
 import com.tv.wnotes.ui.editor.engine.logic.WMutationEngine
@@ -20,7 +19,7 @@ import com.tv.wnotes.ui.editor.engine.state.*
 class WInputController(
     private val editorState: WEditorState,
     private val historyManager: WHistoryManager,
-    private val clipboardManager: WClipboardManager
+    private val clipboardManager: WClipboardManager,
 ) {
     private var isBatchEditing = false
 
@@ -37,7 +36,7 @@ class WInputController(
         editorState.updateSnapshot(newSnapshot)
     }
 
-    private fun applyMutation(result: WMutationResult) {
+    fun applyMutation(result: WMutationResult) {
         if (result is WMutationResult.Success) {
             val before = editorState.snapshot.value
             val operation = WOperation.GeneralMutation(
@@ -100,19 +99,17 @@ class WInputController(
                 clipboardManager.paste(snapshot, asPlainText = true)?.let { onOperation(it) }
             }
             WShortcut.SelectAll -> {
-                val newSelection = WSelectionManager.selectAll(snapshot.document.blocks)
+                val currentBlockId = snapshot.cursor.position.blockId
+                val newSelection = if (currentBlockId == "W_NOTE_TITLE") {
+                    // If in title, select only the title
+                    WSelectionManager.selectParagraph(snapshot.cursor.position, snapshot.document.blocks, snapshot.document.metadata.title)
+                } else {
+                    // Otherwise select everything in the note section
+                    WSelectionManager.selectAll(snapshot.document.blocks, snapshot.document.metadata.title)
+                }
                 editorState.updateSnapshot(snapshot.copy(selection = newSelection))
             }
         }
-    }
-
-    fun createInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT or 
-                             android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-                             android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-        outAttrs.imeOptions = EditorInfo.IME_ACTION_DONE
-        
-        return WInputConnection(this, editorState)
     }
 
     /**
@@ -160,7 +157,7 @@ class WInputController(
                     } else current
                 }
             }
-            com.tv.wnotes.ui.editor.engine.logic.NavigationDirection.UP, 
+            com.tv.wnotes.ui.editor.engine.logic.NavigationDirection.UP,
             com.tv.wnotes.ui.editor.engine.logic.NavigationDirection.DOWN -> {
                 (layoutProvider as? com.tv.wnotes.ui.editor.engine.renderer.WLayoutState)?.getNextPosition(current, direction) ?: current
             }

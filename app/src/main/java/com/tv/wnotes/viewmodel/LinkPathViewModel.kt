@@ -6,8 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.tv.wnotes.data.local.WNotesDatabase
 import com.tv.wnotes.data.local.entity.LinkPath
 import com.tv.wnotes.data.local.entity.Note
+import com.tv.wnotes.data.local.model.GroupPathInfo
 import com.tv.wnotes.data.local.model.NotePathInfo
 import com.tv.wnotes.data.repository.LinkPathRepository
+import com.tv.wnotes.ui.home.HomeItem
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -21,13 +23,53 @@ class LinkPathViewModel(application: Application) : AndroidViewModel(application
     val allNotePathInfo: StateFlow<List<NotePathInfo>> = repository.allNotePathInfo
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    fun createStaple(name: String, notes: List<Note>, onCreated: (Long) -> Unit = {}) {
+    val allGroupPathInfo: StateFlow<List<GroupPathInfo>> = repository.allGroupPathInfo
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    fun createStaple(name: String, items: List<HomeItem>, onCreated: (Long) -> Unit = {}) {
         viewModelScope.launch {
             val pathId = repository.createStaple(name)
-            notes.forEach { note ->
-                repository.stapleNote(pathId, note.id)
+            items.forEach { item ->
+                when (item) {
+                    is HomeItem.NoteItem -> repository.stapleNote(pathId, item.note.id)
+                    is HomeItem.GroupItem -> repository.stapleGroup(pathId, item.groupWithNotes.group.id)
+                }
             }
             onCreated(pathId)
+        }
+    }
+
+    fun getItemsInPath(pathId: Long): Flow<List<HomeItem>> {
+        val membersFlow = repository.getMembersInPath(pathId)
+        val allNotesFlow = database.noteDao().getAllNotes()
+        val allGroupsFlow = database.noteGroupDao().getAllGroupsWithNotes()
+
+        return combine(membersFlow, allNotesFlow, allGroupsFlow) { members, notes, groups ->
+            members.mapNotNull { member ->
+                if (member.noteId != null) {
+                    notes.find { it.id == member.noteId }?.let { HomeItem.NoteItem(it) }
+                } else if (member.groupId != null) {
+                    groups.find { it.group.id == member.groupId }?.let { HomeItem.GroupItem(it) }
+                } else null
+            }
+        }
+    }
+
+    fun updateOrder(pathId: Long, items: List<HomeItem>) {
+        viewModelScope.launch {
+            repository.updateOrder(pathId, items)
+        }
+    }
+
+    fun stapleGroup(groupId: Long, pathId: Long) {
+        viewModelScope.launch {
+            repository.stapleGroup(pathId, groupId)
+        }
+    }
+
+    fun unstapleGroup(groupId: Long) {
+        viewModelScope.launch {
+            repository.unstapleGroup(groupId)
         }
     }
 
@@ -35,15 +77,22 @@ class LinkPathViewModel(application: Application) : AndroidViewModel(application
         return repository.getNotesInPath(pathId)
     }
 
-    fun updateOrder(pathId: Long, notes: List<Note>) {
+    fun createStapleWithIds(name: String, noteIds: List<Long>) {
         viewModelScope.launch {
-            repository.updateOrder(pathId, notes)
+            val pathId = repository.createStaple(name)
+            noteIds.forEach { repository.stapleNote(pathId, it) }
         }
     }
 
     fun deletePath(path: LinkPath) {
         viewModelScope.launch {
             repository.deletePath(path)
+        }
+    }
+
+    fun renameStaple(path: LinkPath, newName: String) {
+        viewModelScope.launch {
+            repository.renameStaple(path, newName)
         }
     }
 
@@ -62,6 +111,28 @@ class LinkPathViewModel(application: Application) : AndroidViewModel(application
     fun unstapleNote(noteId: Long) {
         viewModelScope.launch {
             repository.unstapleNote(noteId)
+        }
+    }
+
+    fun insertNoteInPath(pathId: Long, noteId: Long, index: Int) {
+        viewModelScope.launch {
+            val currentItems = getItemsInPath(pathId).first()
+            val mutableItems = currentItems.toMutableList()
+            
+            // Check if note is already in the path (to avoid duplicates if called multiple times)
+            if (mutableItems.any { it is HomeItem.NoteItem && it.note.id == noteId }) {
+                return@launch
+            }
+
+            val note = database.noteDao().getNoteById(noteId)
+            if (note != null) {
+                if (index >= 0 && index <= mutableItems.size) {
+                    mutableItems.add(index, HomeItem.NoteItem(note))
+                } else {
+                    mutableItems.add(HomeItem.NoteItem(note))
+                }
+                repository.updateOrder(pathId, mutableItems)
+            }
         }
     }
 

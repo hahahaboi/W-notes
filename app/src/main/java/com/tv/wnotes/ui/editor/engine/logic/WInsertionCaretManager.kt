@@ -34,14 +34,14 @@ object WInsertionCaretManager {
         println("DROP STAGE 5: Calculated Offset - ${hit.characterIndex}")
         
         // 2. Check if the target is valid (cannot drop inside the source selection)
-        val isValid = dragState.selectedRange?.let { source ->
-            !WSelectionManager.containsExclusive(
-                state = WSelectionState(ranges = listOf(source), isActive = true),
+        val isValid = if (dragState.selectedRanges.isNotEmpty()) {
+            !WSelectionManager.containsAnyExclusive(
+                ranges = dragState.selectedRanges,
                 blockId = point.blockId,
                 offset = point.offset,
                 blocks = blocks
             )
-        } ?: true
+        } else true
 
         // 3. Get the physical geometry for the insertion beam
         val beamRect = layoutProvider.getInsertionBeamForPoint(point) ?: Rect.Zero

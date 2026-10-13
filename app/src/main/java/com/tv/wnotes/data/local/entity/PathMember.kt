@@ -8,6 +8,7 @@ data class PathMember(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val pathId: Long,
-    val noteId: Long,
+    val noteId: Long? = null,
+    val groupId: Long? = null,
     val orderIndex: Int
 )

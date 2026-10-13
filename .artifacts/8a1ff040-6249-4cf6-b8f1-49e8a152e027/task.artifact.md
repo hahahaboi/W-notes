@@ -1,0 +1,5 @@
+- [ ] Refactor `MultiSelectFloatingActions` (remove grouping mode)
+- [ ] Refactor `HomeScreen` (direct group naming)
+- [ ] Update `NoteWorkspaceScreen` signature for `drawerProgress`
+- [ ] Update all calling screens and `NavGraph`
+- [ ] Verify build

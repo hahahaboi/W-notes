@@ -1,6 +1,5 @@
 package com.tv.wnotes.ui.editor.engine.renderer
 
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -23,7 +22,6 @@ import com.tv.wnotes.ui.editor.engine.state.WEditorSnapshot
 @Composable
 fun WDragPreviewRenderer(
     previewState: WDragPreviewState,
-    snapshot: WEditorSnapshot,
     animController: WDragAnimationController,
     modifier: Modifier = Modifier
 ) {
@@ -36,7 +34,6 @@ fun WDragPreviewRenderer(
     val content = previewState.content
     val fingerPosition = previewState.position
     val fingerOffset = previewState.fingerOffset
-    val density = LocalDensity.current
 
     // Animated properties from controller
     val scale by animController.scale.asState()
@@ -51,7 +48,7 @@ fun WDragPreviewRenderer(
     val displayOffset = currentPos + fingerOffset
 
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .wrapContentSize()
             .graphicsLayer {
                 translationX = displayOffset.x
@@ -69,9 +66,13 @@ fun WDragPreviewRenderer(
             content.blocks.forEach { block ->
                 WBlockRenderer(
                     block = block,
-                    snapshot = snapshot,
+                    annotations = emptyList(),
+                    layoutState = WLayoutState(), // One-off state for preview
+                    rootCoordinates = null,
                     onTextLayout = {},
-                    forceFullOpacity = true
+                    onCommand = {},
+                    isBeingDragged = false,
+                    placeholderAlpha = 1f
                 )
             }
         }

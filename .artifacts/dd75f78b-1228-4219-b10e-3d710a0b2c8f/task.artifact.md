@@ -1,0 +1,11 @@
+- [x] Modify `WEditorCommand.kt` to add `AdjustFontSize` command
+- [x] Implement `adjustFontSize` in `WMutationEngine.kt`
+- [x] Add `adjustFontSize` to `WEditorState.kt`
+- [x] Update `WEditorHost.kt` to handle `AdjustFontSize` command
+- [x] Create `FontSizeScrollWheel` in `WEditorOverlay.kt`
+- [x] Integrate `FontSizeScrollWheel` into `MultiSelectionToolbar`
+- [x] Verify implementation with unit tests
+- [x] Replace multi-selection hint with floating Cancel button
+- [x] Add Cancel Selection to toolbar dropdown
+- [x] Implement Tie Tabs feature
+- [/] Fix layout regression and infinite loops

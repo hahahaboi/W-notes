@@ -28,7 +28,7 @@ fun NoteGrid(
         }
     } else {
         LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
+            columns = GridCells.Adaptive(minSize = 170.dp),
             state = rememberLazyGridState(),
             contentPadding = PaddingValues(16.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),

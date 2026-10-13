@@ -1,18 +1,19 @@
 package com.tv.wnotes.navigation
 
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.tv.wnotes.ui.about.AboutScreen
 import com.tv.wnotes.ui.editor.NoteEditorScreen
 import com.tv.wnotes.ui.folders.FolderDetailScreen
 import com.tv.wnotes.ui.folders.FoldersScreen
 import com.tv.wnotes.ui.home.*
 import com.tv.wnotes.ui.paths.LinkPathsScreen
 import com.tv.wnotes.ui.paths.PathDetailScreen
+import com.tv.wnotes.ui.settings.SettingsScreen
 import com.tv.wnotes.viewmodel.FolderViewModel
 import com.tv.wnotes.viewmodel.LinkPathViewModel
 import com.tv.wnotes.viewmodel.NoteViewModel
@@ -23,7 +24,10 @@ fun NavGraph(
     noteViewModel: NoteViewModel,
     folderViewModel: FolderViewModel,
     linkPathViewModel: LinkPathViewModel,
-    onOpenDrawer: () -> Unit
+    onOpenDrawer: () -> Unit,
+    drawerProgress: Float,
+    isDarkMode: Boolean,
+    onDarkModeChange: (Boolean) -> Unit
 ) {
     NavHost(
         navController = navController,
@@ -43,7 +47,34 @@ fun NavGraph(
                 onNavigateToAllNotes = { navController.navigate(Screen.AllNotes.route) },
                 onNavigateToUncategorized = { navController.navigate(Screen.Uncategorized.route) },
                 onNavigateToTrash = { navController.navigate(Screen.Trash.route) },
-                onOpenDrawer = onOpenDrawer
+                onNavigateToGroup = { id, name ->
+                    navController.navigate(Screen.GroupDetail.createRoute(id, name))
+                },
+                onOpenDrawer = onOpenDrawer,
+                drawerProgress = drawerProgress
+            )
+        }
+
+        composable(
+            route = Screen.GroupDetail.route,
+            arguments = listOf(
+                navArgument("groupId") { type = NavType.LongType },
+                navArgument("groupName") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val groupId = backStackEntry.arguments?.getLong("groupId") ?: 0L
+            val groupName = backStackEntry.arguments?.getString("groupName") ?: ""
+            GroupDetailScreen(
+                groupId = groupId,
+                groupName = groupName,
+                viewModel = noteViewModel,
+                folderViewModel = folderViewModel,
+                linkPathViewModel = linkPathViewModel,
+                onBack = { navController.popBackStack() },
+                onNoteClick = { noteId ->
+                    navController.navigate(Screen.Editor.createRoute(noteId))
+                },
+                drawerProgress = drawerProgress
             )
         }
 
@@ -56,7 +87,14 @@ fun NavGraph(
                 onNoteClick = { noteId ->
                     navController.navigate(Screen.Editor.createRoute(noteId))
                 },
-                onOpenDrawer = onOpenDrawer
+                onOpenDrawer = onOpenDrawer,
+                onNavigateToEditor = { 
+                    navController.navigate(Screen.Editor.createRoute())
+                },
+                onNavigateToGroup = { id, name ->
+                    navController.navigate(Screen.GroupDetail.createRoute(id, name))
+                },
+                drawerProgress = drawerProgress
             )
         }
 
@@ -69,7 +107,14 @@ fun NavGraph(
                 onNoteClick = { noteId ->
                     navController.navigate(Screen.Editor.createRoute(noteId))
                 },
-                onOpenDrawer = onOpenDrawer
+                onNavigateToGroup = { id, name ->
+                    navController.navigate(Screen.GroupDetail.createRoute(id, name))
+                },
+                onOpenDrawer = onOpenDrawer,
+                onNavigateToEditor = {
+                    navController.navigate(Screen.Editor.createRoute())
+                },
+                drawerProgress = drawerProgress
             )
         }
 
@@ -82,7 +127,34 @@ fun NavGraph(
                 onNoteClick = { noteId ->
                     navController.navigate(Screen.Editor.createRoute(noteId))
                 },
-                onOpenDrawer = onOpenDrawer
+                onNavigateToGroup = { id, name ->
+                    navController.navigate(Screen.GroupDetail.createRoute(id, name))
+                },
+                onOpenDrawer = onOpenDrawer,
+                onNavigateToEditor = {
+                    navController.navigate(Screen.Editor.createRoute())
+                },
+                drawerProgress = drawerProgress
+            )
+        }
+
+        composable(Screen.Pinned.route) {
+            PinnedNotesScreen(
+                viewModel = noteViewModel,
+                folderViewModel = folderViewModel,
+                linkPathViewModel = linkPathViewModel,
+                onBack = { navController.popBackStack() },
+                onNoteClick = { noteId ->
+                    navController.navigate(Screen.Editor.createRoute(noteId))
+                },
+                onNavigateToGroup = { id, name ->
+                    navController.navigate(Screen.GroupDetail.createRoute(id, name))
+                },
+                onOpenDrawer = onOpenDrawer,
+                onNavigateToEditor = {
+                    navController.navigate(Screen.Editor.createRoute())
+                },
+                drawerProgress = drawerProgress
             )
         }
 
@@ -95,32 +167,54 @@ fun NavGraph(
                 onNoteClick = { noteId ->
                     navController.navigate(Screen.Editor.createRoute(noteId))
                 },
-                onOpenDrawer = onOpenDrawer
+                onNavigateToGroup = { id, name ->
+                    navController.navigate(Screen.GroupDetail.createRoute(id, name))
+                },
+                onOpenDrawer = onOpenDrawer,
+                drawerProgress = drawerProgress
             )
         }
 
-        composable(
-            route = Screen.Folders.route,
-            arguments = listOf(
-                navArgument("parentId") { 
-                    type = NavType.LongType
-                    defaultValue = -1L
-                }
+        composable(Screen.Locked.route) {
+            LockedNotesScreen(
+                viewModel = noteViewModel,
+                folderViewModel = folderViewModel,
+                linkPathViewModel = linkPathViewModel,
+                onBack = { navController.popBackStack() },
+                onNoteClick = { noteId ->
+                    navController.navigate(Screen.Editor.createRoute(noteId))
+                },
+                onNavigateToGroup = { id, name ->
+                    navController.navigate(Screen.GroupDetail.createRoute(id, name))
+                },
+                onOpenDrawer = onOpenDrawer,
+                drawerProgress = drawerProgress
             )
-        ) { backStackEntry ->
+        }
+
+        composable(Screen.About.route) {
+            AboutScreen()
+        }
+
+        composable(Screen.Settings.route) {
+            SettingsScreen(
+                isDarkMode = isDarkMode,
+                onDarkModeChange = onDarkModeChange,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.Folders.route) { backStackEntry ->
             val parentId = backStackEntry.arguments?.getLong("parentId")
             FoldersScreen(
                 parentId = if (parentId == -1L) null else parentId,
                 viewModel = folderViewModel,
                 onBack = { navController.popBackStack() },
                 onFolderClick = { id, name ->
-                    // Navigate deeper into subfolders
-                    navController.navigate(Screen.Folders.createRoute(id))
+                    navController.navigate(Screen.FolderDetail.createRoute(id, name))
                 },
                 onOpenDrawer = onOpenDrawer,
-                onViewNotes = { id, name ->
-                    navController.navigate(Screen.FolderDetail.createRoute(id, name))
-                }
+                drawerProgress = drawerProgress
             )
         }
 
@@ -146,7 +240,14 @@ fun NavGraph(
                 onFolderClick = { id, name ->
                     navController.navigate(Screen.FolderDetail.createRoute(id, name))
                 },
-                onOpenDrawer = onOpenDrawer
+                onNavigateToGroup = { id, name ->
+                    navController.navigate(Screen.GroupDetail.createRoute(id, name))
+                },
+                onOpenDrawer = onOpenDrawer,
+                onNavigateToEditor = { fId ->
+                    navController.navigate(Screen.Editor.createRoute(folderId = fId))
+                },
+                drawerProgress = drawerProgress
             )
         }
 
@@ -158,7 +259,8 @@ fun NavGraph(
                 onPathClick = { id, name ->
                     navController.navigate(Screen.PathDetail.createRoute(id, name))
                 },
-                onOpenDrawer = onOpenDrawer
+                onOpenDrawer = onOpenDrawer,
+                drawerProgress = drawerProgress
             )
         }
 
@@ -179,9 +281,13 @@ fun NavGraph(
                 noteViewModel = noteViewModel,
                 onBack = { navController.popBackStack() },
                 onNoteClick = { noteId ->
-                    navController.navigate(Screen.Editor.createRoute(noteId, pathId))
+                    navController.navigate(Screen.Editor.createRoute(noteId = noteId, pathId = pathId))
                 },
-                onOpenDrawer = onOpenDrawer
+                onNavigateToGroup = { id, name ->
+                    navController.navigate(Screen.GroupDetail.createRoute(id, name))
+                },
+                onOpenDrawer = onOpenDrawer,
+                drawerProgress = drawerProgress
             )
         }
 
@@ -195,23 +301,35 @@ fun NavGraph(
                 navArgument("pathId") {
                     type = NavType.LongType
                     defaultValue = -1L
+                },
+                navArgument("folderId") {
+                    type = NavType.LongType
+                    defaultValue = -1L
+                },
+                navArgument("tabId") {
+                    type = NavType.LongType
+                    defaultValue = -1L
                 }
             )
         ) { backStackEntry ->
             val noteId = backStackEntry.arguments?.getLong("noteId")
             val pathId = backStackEntry.arguments?.getLong("pathId")
+            val folderId = backStackEntry.arguments?.getLong("folderId")
+            val tabId = backStackEntry.arguments?.getLong("tabId")
             NoteEditorScreen(
                 noteId = if (noteId == -1L) null else noteId,
                 pathId = if (pathId == -1L) null else pathId,
+                folderId = if (folderId == -1L) null else folderId,
+                initialTabId = if (tabId == -1L || tabId == null) null else tabId,
                 viewModel = noteViewModel,
                 folderViewModel = folderViewModel,
                 linkPathViewModel = linkPathViewModel,
                 onBack = {
                     navController.popBackStack()
                 },
-                onNavigateToNote = { id, pId ->
-                    navController.navigate(Screen.Editor.createRoute(id, pId)) {
-                        popUpTo(Screen.Home.route) { inclusive = false }
+                onNavigateToNote = { id: Long, tId: Long? ->
+                    navController.navigate(Screen.Editor.createRoute(id, tabId = tId)) {
+                        popUpTo(Screen.Editor.route) { inclusive = true }
                     }
                 }
             )

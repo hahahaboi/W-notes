@@ -1,0 +1,10 @@
+- [x] Modify `FloatingRoughNote.kt` to reduce collapsed size and adjust docking
+    - [x] Update `animatedX` target values for docking
+    - [x] Update Surface size in collapsed state
+    - [x] Update inner nub size
+- [ ] Improve draggability and positioning (New Request)
+    - [ ] Update `animatedX` docking targets to keep button on-screen
+    - [ ] Enable dragging while collapsed by removing `!isCollapsed` check
+    - [ ] Increase hit area (Surface size) while keeping visual size small
+    - [ ] Update snap logic and drag boundaries
+- [ ] Verify changes

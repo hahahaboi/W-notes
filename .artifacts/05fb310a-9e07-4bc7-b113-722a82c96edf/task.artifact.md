@@ -1,0 +1,22 @@
+# Tasks - Marker System Phase 6: Organization & Visual Hierarchy
+
+- [x] Data Layer
+    - [x] Add `MarkerType` enum to `TextMarker.kt`
+    - [x] Update `TextMarker` entity with `type` field
+    - [x] Implement database migration in `WNotesDatabase.kt`
+- [x] Engine Layer
+    - [x] Add `UpdateMarkerType` to `WEditorCommand.kt`
+    - [x] Implement `updateMarkerType` in `WMutationEngine.kt`
+    - [x] Handle `UpdateMarkerType` in `WEditorHost.kt`
+- [x] UI - Sidebar
+    - [x] Implement type filter chips in `WMarkerSidebar.kt`
+    - [x] Implement marker grouping by type in `WMarkerSidebar.kt`
+    - [x] Add "Change Type" sub-menu to long-press actions
+- [x] UI - Editor & Quick Jump
+    - [x] Draw persistent dotted underline indicators in `WEditorRenderer.kt`
+    - [x] Update `WMarkerQuickJump.kt` with type indicators
+- [x] Verification
+    - [x] assembleDebug successful
+    - [x] Manual test: Migration and existing markers
+    - [x] Manual test: Type changing and persistent indicators
+    - [x] Manual test: Filtering and grouping

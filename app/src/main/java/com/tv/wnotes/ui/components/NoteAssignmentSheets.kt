@@ -1,27 +1,15 @@
 package com.tv.wnotes.ui.components
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -55,24 +43,57 @@ fun FolderAssignmentSheet(
             ) {
                 Text("Uncategorized", style = MaterialTheme.typography.titleMedium)
             }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(folders) { folder ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                onAssign(folder.id)
-                                onDismiss()
+            val sheetScrollState = androidx.compose.foundation.lazy.rememberLazyListState()
+            Box(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
+                LazyColumn(
+                    state = sheetScrollState,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    item {
+                        TextButton(
+                            onClick = { showCreateDialog = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = PaddingValues(vertical = 12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Start,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text("New Folder", style = MaterialTheme.typography.titleMedium)
                             }
-                            .padding(vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("${folder.icon} ${folder.name}", style = MaterialTheme.typography.titleMedium)
+                        }
+                    }
+
+                    items(folders) { folder ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onAssign(folder.id)
+                                    onDismiss()
+                                }
+                                .padding(vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Folder,
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Text(folder.name, style = MaterialTheme.typography.titleMedium)
+                        }
                     }
                 }
-            }
-            TextButton(onClick = { showCreateDialog = true }) {
-                Text("+ New Folder")
+                WScrollbar(
+                    listState = sheetScrollState,
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                )
             }
         }
     }
@@ -119,24 +140,57 @@ fun StapleAssignmentSheet(
             ) {
                 Text("Not Stapled", style = MaterialTheme.typography.titleMedium)
             }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(paths) { path ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                onAssign(path.id)
-                                onDismiss()
+            val sheetScrollState = androidx.compose.foundation.lazy.rememberLazyListState()
+            Box(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
+                LazyColumn(
+                    state = sheetScrollState,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    item {
+                        TextButton(
+                            onClick = { showCreateDialog = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = PaddingValues(vertical = 12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Start,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text("New Staple", style = MaterialTheme.typography.titleMedium)
                             }
-                            .padding(vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("📎 ${path.name}", style = MaterialTheme.typography.titleMedium)
+                        }
+                    }
+
+                    items(paths) { path ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onAssign(path.id)
+                                    onDismiss()
+                                }
+                                .padding(vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Link,
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Text(path.name, style = MaterialTheme.typography.titleMedium)
+                        }
                     }
                 }
-            }
-            TextButton(onClick = { showCreateDialog = true }) {
-                Text("+ New Staple")
+                WScrollbar(
+                    listState = sheetScrollState,
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                )
             }
         }
     }
@@ -158,7 +212,7 @@ fun StapleAssignmentSheet(
 }
 
 @Composable
-private fun CreateNameDialog(
+fun CreateNameDialog(
     title: String,
     placeholder: String,
     onDismiss: () -> Unit,

@@ -1,6 +1,5 @@
 package com.tv.wnotes.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,8 +15,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.tv.wnotes.data.local.entity.Note
+import com.tv.wnotes.util.NoteDisplayUtils
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -31,6 +30,9 @@ fun NoteCard(
 ) {
     val dateFormat = remember { SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()) }
     val dateString = dateFormat.format(Date(note.updatedAt))
+    val displayData = remember(note) {
+        NoteDisplayUtils.resolveNoteDisplayData(note)
+    }
 
     Card(
         modifier = modifier
@@ -51,7 +53,7 @@ fun NoteCard(
                 verticalAlignment = Alignment.Top
             ) {
                 Text(
-                    text = note.title.ifEmpty { "Untitled" },
+                    text = displayData.displayTitle,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -62,7 +64,7 @@ fun NoteCard(
                     Icon(
                         imageVector = Icons.Default.Star,
                         contentDescription = null,
-                        tint = Color(0xFFFFB300),
+                        tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -71,7 +73,7 @@ fun NoteCard(
             Spacer(modifier = Modifier.height(4.dp))
             
             Text(
-                text = note.content,
+                text = displayData.displayContent,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,

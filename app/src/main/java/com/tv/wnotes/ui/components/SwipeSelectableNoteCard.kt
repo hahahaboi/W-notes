@@ -2,12 +2,14 @@ package com.tv.wnotes.ui.components
 
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,6 +18,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import com.tv.wnotes.ui.home.HomeItem
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tv.wnotes.data.local.entity.Note
@@ -32,24 +37,62 @@ fun SwipeSelectableNoteCard(
     onLongPress: () -> Unit,
     onSwipeRight: () -> Unit,
     onSwipeLeft: () -> Unit,
+    onDrop: (HomeItem, String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val dragCoordinator = LocalWorkspaceDragCoordinator.current
     var offsetX by remember(note.id) { mutableStateOf(0f) }
     var swipeMode by remember(note.id) { mutableStateOf(false) }
     val animatedOffset by animateFloatAsState(targetValue = offsetX, label = "offset")
-    val elevation by animateDpAsState(targetValue = if (swipeMode || selected) 8.dp else 2.dp, label = "elevation")
+    val isBeingDragged = dragCoordinator.draggedItem?.id == "note_${note.id}" && dragCoordinator.isActuallyDragging
+    val isHovered = dragCoordinator.hoveredTargetId == "note_${note.id}"
+    
+    val elevation by animateDpAsState(
+        targetValue = if (swipeMode || selected || isBeingDragged || isHovered) 12.dp else 2.dp, 
+        label = "elevation"
+    )
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .pointerInput(note.id, isSelectionMode) {
+            .onGloballyPositioned { coords ->
+                dragCoordinator.updateItemBounds("note_${note.id}", coords.boundsInWindow())
+            }
+            .then(
+                if (isHovered) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(22.dp))
+                else Modifier
+            )
+            .graphicsLayer {
+                alpha = if (isBeingDragged) 0f else 1f
+            }
+            .pointerInput(note.id, isSelectionMode, selected) {
                 detectTapGestures(
-                    onTap = { onClick() },
-                    onLongPress = { onLongPress() }
+                    onTap = { onClick() }
+                )
+            }
+            .pointerInput(note.id, isSelectionMode, selected) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { offset ->
+                        // 1. Always trigger long press (shows menu)
+                        onLongPress()
+                        // 2. Start dragging
+                        dragCoordinator.startDrag(HomeItem.NoteItem(note), offset)
+                    },
+                    onDragEnd = { 
+                        val result = dragCoordinator.endDrag()
+                        if (result != null) {
+                            onDrop(result.draggedItem, result.targetId)
+                        }
+                    },
+                    onDragCancel = { dragCoordinator.cancel() },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        dragCoordinator.updateDrag(dragAmount)
+                    }
                 )
             }
             .pointerInput(note.id, isSelectionMode) {
-                if (!isSelectionMode) {
+                if (!isSelectionMode && !selected) {
                     detectDragGesturesAfterLongPress(
                         onDragStart = { 
                             swipeMode = true 
@@ -83,10 +126,13 @@ fun SwipeSelectableNoteCard(
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.alpha((offsetX / 150f).coerceIn(0f, 1f))
             )
-            Text(
-                text = "🗑",
-                fontSize = 24.sp,
-                modifier = Modifier.alpha((-offsetX / 150f).coerceIn(0f, 1f))
+            Icon(
+                imageVector = Icons.Outlined.Delete,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier
+                    .size(28.dp)
+                    .alpha((-offsetX / 150f).coerceIn(0f, 1f))
             )
         }
 

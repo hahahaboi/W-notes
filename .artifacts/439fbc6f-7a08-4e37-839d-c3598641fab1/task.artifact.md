@@ -1,0 +1,12 @@
+- [x] Implement `SmartSearchEngine.kt` for parsing and filtering
+- [x] Update `NoteViewModel.kt` to integrate `SmartSearchEngine` in `searchResults`
+- [x] Update `NoteWorkspaceScreen.kt`
+    - [x] Change grid to adaptive
+    - [x] Update local filtering logic
+    - [x] Update search placeholder
+- [x] Update `HomeScreen.kt`
+    - [x] Change grid to adaptive
+    - [x] Update search placeholder
+- [x] Update `NoteGrid.kt` to use adaptive grid
+- [x] Verify smart search prompts ("mention", word count)
+- [x] Verify landscape grid behavior

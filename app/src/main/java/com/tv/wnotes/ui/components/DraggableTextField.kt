@@ -211,7 +211,7 @@ fun DraggableTextField(
                             if (layout != null && isDraggingSelection) {
                                 val cursorRect = layout.getCursorRect(pos)
                                 Canvas(Modifier.fillMaxSize()) {
-                                    val color = Color(0xFF6200EE)
+                                    val color = Color.Gray
                                     drawRect(color, cursorRect.topLeft, Size(3.dp.toPx(), cursorRect.height))
                                     drawRect(color, Offset(cursorRect.left - 6.dp.toPx(), cursorRect.top), Size(15.dp.toPx(), 2.5.dp.toPx()))
                                     drawRect(color, Offset(cursorRect.left - 6.dp.toPx(), cursorRect.bottom - 2.5.dp.toPx()), Size(15.dp.toPx(), 2.5.dp.toPx()))

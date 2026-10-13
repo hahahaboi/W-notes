@@ -1,12 +1,10 @@
-- [x] Rename "Link Paths" to "Stapled"
-    - [x] Update `LinkPathViewModel.kt` and `LinkPathRepository.kt`
-    - [x] Update `MainActivity.kt` (Drawer)
-    - [x] Update `HomeScreen.kt` (Menus)
-    - [x] Update `NoteEditorScreen.kt` (Badges/Menu)
-    - [x] Update `LinkPathsScreen.kt` (Screen titles)
-    - [x] Update `NoteAssignmentSheets.kt` (Rename component and text)
-    - [x] Update emojis in `NoteCard.kt`, `SquareNoteCard.kt`
-- [/] Update App Icon
-    - [ ] Replace launcher icons with the new image (Waiting for image file)
-    - [x] Update adaptive icon background
-- [ ] Verify build and functionality
+# Task: Enable Note Creation in Staples and Workspace Sections
+
+- [x] Update `Screen.kt` navigation routes (Verified: already supported folderId)
+- [x] Update `NavGraph.kt` navigation logic (Verified: already supported folderId and onNavigateToEditor)
+- [x] Enhance `NoteWorkspaceScreen.kt` with FAB support (Verified: already supported)
+- [x] Enhance `PathDetailScreen.kt` with FAB `[x]`
+- [x] Update `NoteEditorScreen.kt` logic for `folderId` and auto-stapling `[x]`
+- [x] Connect `onAddNote` in `FolderDetailScreen.kt` (Verified: already supported)
+- [x] Connect `onAddNote` in `AllNotesScreen.kt` and `UncategorizedNotesScreen.kt` (Verified: already supported)
+- [x] Verify changes `[x]`

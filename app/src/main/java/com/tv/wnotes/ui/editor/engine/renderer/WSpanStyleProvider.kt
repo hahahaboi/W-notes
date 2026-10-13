@@ -8,6 +8,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.sp
 import com.tv.wnotes.ui.editor.engine.model.SpanType
 import com.tv.wnotes.ui.editor.engine.model.WTextSpan
 
@@ -36,6 +37,10 @@ object WSpanStyleProvider {
                 color = MaterialTheme.colorScheme.primary,
                 textDecoration = TextDecoration.Underline
             )
+            SpanType.FontSize -> {
+                val size = span.attributes["size"]?.toIntOrNull() ?: 16
+                SpanStyle(fontSize = size.sp)
+            }
             else -> SpanStyle()
         }
     }
