@@ -75,7 +75,7 @@ class WAnnotationManagerTest {
     @Test
     fun testShiftDeletionAfter() {
         val ann = createAnnotation(10, 20)
-        val shifted = WAnnotationManager.shiftAnnotationsForDeletion(listOf(ann), blockId, 25, 5)
+        val shifted = WAnnotationManager.shiftAnnotationsForDeletion(listOf(ann), blockId, 25, 30)
         assertEquals(10, shifted[0].startOffset)
         assertEquals(20, shifted[0].endOffset)
     }

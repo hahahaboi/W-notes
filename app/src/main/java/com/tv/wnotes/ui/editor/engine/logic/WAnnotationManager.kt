@@ -91,11 +91,13 @@ object WAnnotationManager {
                     val overlapLength = intersectionEnd - intersectionStart
 
                     var newStart = start
-                    val newEnd = end - overlapLength
+                    var newEnd = end - overlapLength
 
                     if (deleteStart <= start) {
-                        // Deletion started before/at start: pull start to deleteStart
+                        // Deletion started before/at start: pull start to deleteStart, and the
+                        // surviving tail also moves left by the part of the deletion before it
                         newStart = deleteStart
+                        newEnd -= start - deleteStart
                     }
 
                     if (newStart < newEnd) {

@@ -93,7 +93,8 @@ class WAnnotationUndoRedoTest {
         val s3 = (res3 as WMutationResult.Success).snapshot
         current = historyManager.record(current, WOperation.GeneralMutation(current, s3, WMutationType.INSERT_TEXT))
 
-        assertEquals("A BHello world", current.document.blocks[0].let { (it as com.tv.wnotes.ui.editor.engine.model.WTextBlock).text })
+        // Annotating "A" leaves the cursor at the end of the range (offset 1), so "B" lands there
+        assertEquals("AB Hello world", current.document.blocks[0].let { (it as com.tv.wnotes.ui.editor.engine.model.WTextBlock).text })
         assertEquals(1, current.annotations.size)
 
         // Undo B

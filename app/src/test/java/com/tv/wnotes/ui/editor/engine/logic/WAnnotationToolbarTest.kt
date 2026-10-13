@@ -65,6 +65,7 @@ class WAnnotationToolbarTest {
         val nextSnapshot = (result as WMutationResult.Success).snapshot
         assertEquals(1, nextSnapshot.annotations.size)
         assertEquals("Greeting", nextSnapshot.annotations[0].content)
-        assertEquals(range, WSelectionRange(nextSnapshot.annotations[0].startOffset.let { WSelectionPoint(blockId, it) }, nextSnapshot.annotations[0].endOffset.let { WSelectionPoint(blockId, it) }))
+        assertEquals(range.anchor.offset, nextSnapshot.annotations[0].startOffset)
+        assertEquals(range.focus.offset, nextSnapshot.annotations[0].endOffset)
     }
 }
