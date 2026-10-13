@@ -6,27 +6,23 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -36,15 +32,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.tv.wnotes.data.local.entity.Note
-import com.tv.wnotes.ui.components.GroupCollageCard
 import com.tv.wnotes.ui.components.HorizontalStapleConnector
 import com.tv.wnotes.ui.components.PinDialog
 import com.tv.wnotes.ui.components.PinMode
 import com.tv.wnotes.ui.home.HomeItem
+import com.tv.wnotes.util.NoteDisplayUtils
 import com.tv.wnotes.viewmodel.FolderViewModel
 import com.tv.wnotes.viewmodel.LinkPathViewModel
 import com.tv.wnotes.viewmodel.NoteViewModel
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -65,8 +60,11 @@ fun PathDetailScreen(
     var editableItems by remember { mutableStateOf(emptyList<HomeItem>()) }
     
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    
     var draggingItemIndex by remember { mutableStateOf<Int?>(null) }
-    var deltaX by remember { mutableStateOf(0f) }
+    var initialDragIndex by remember { mutableStateOf<Int?>(null) }
+    var deltaX by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(databaseItems) {
         if (draggingItemIndex == null) {
@@ -104,7 +102,8 @@ fun PathDetailScreen(
 
     var showEditItemsDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
-    val allNotes by noteViewModel.allNotes.collectAsState()
+    var isCreatingNote by remember { mutableStateOf(false) }
+
     val homeItems by noteViewModel.homeItems.collectAsState()
     val folders by folderViewModel.allFolders.collectAsState()
     val lockedPin by noteViewModel.lockedPin.collectAsState()
@@ -114,6 +113,22 @@ fun PathDetailScreen(
     var showPinEntryForNote by remember { mutableStateOf(false) }
 
     val folderNames = remember(folders) { folders.associate { it.id to it.name } }
+
+    fun createAndAppendNote() {
+        if (isCreatingNote) return
+        isCreatingNote = true
+        scope.launch {
+            try {
+                val newNoteId = noteViewModel.createNoteAndReturnId(title = "", content = "", folderId = null)
+                linkPathViewModel.stapleNote(newNoteId, pathId)
+                onNoteClick(newNoteId)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isCreatingNote = false
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -159,12 +174,12 @@ fun PathDetailScreen(
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { onNoteClick(-1L) },
+                onClick = { createAndAppendNote() },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
                 shape = CircleShape
             ) {
-                Icon(Icons.Default.Add, contentDescription = "New Note")
+                Icon(Icons.Default.Add, contentDescription = "New Note in Staple")
             }
         }
     ) { padding ->
@@ -191,9 +206,24 @@ fun PathDetailScreen(
                 singleLine = true
             )
 
-            if (filteredItems.isEmpty()) {
+            if (filteredItems.isEmpty() && searchQuery.isNotEmpty()) {
                 Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    Text(if (searchQuery.isEmpty()) "No items in this path" else "No matches found")
+                    Text("No matches found")
+                }
+            } else if (filteredItems.isEmpty()) {
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "No notes in this Staple sequence yet",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        AddNoteStapleCard(onClick = { createAndAppendNote() })
+                    }
                 }
             } else {
                 if (searchQuery.isEmpty()) {
@@ -215,39 +245,61 @@ fun PathDetailScreen(
                     ) {
                         itemsIndexed(filteredItems, key = { _, item -> item.id }) { index, item ->
                             val isDragging = draggingItemIndex == index
-                            val zIndex = if (isDragging) 1f else 0f
+                            val zIndex = if (isDragging) 10f else 0f
                             val translationX = if (isDragging) deltaX else 0f
                             
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
+                                    .animateItem()
                                     .zIndex(zIndex)
                                     .graphicsLayer { this.translationX = translationX }
                                     .pointerInput(filteredItems, searchQuery) {
                                         if (searchQuery.isEmpty()) {
                                             detectDragGesturesAfterLongPress(
-                                                onDragStart = { draggingItemIndex = index },
+                                                onDragStart = {
+                                                    draggingItemIndex = index
+                                                    initialDragIndex = index
+                                                    deltaX = 0f
+                                                },
                                                 onDrag = { change, dragAmount ->
                                                     change.consume()
                                                     deltaX += dragAmount.x
                                                     
-                                                    val itemWidthPx = with(density) { 200.dp.toPx() }
-                                                    val targetIndex = if (deltaX > itemWidthPx / 2) index + 1 else if (deltaX < -itemWidthPx / 2) index - 1 else index
+                                                    val itemWidthPx = with(density) { 196.dp.toPx() }
+                                                    val curIdx = draggingItemIndex ?: index
 
-                                                    if (targetIndex in editableItems.indices && targetIndex != index) {
+                                                    if (deltaX > itemWidthPx * 0.5f && curIdx < editableItems.size - 1) {
                                                         val newList = editableItems.toMutableList()
-                                                        val movedItem = newList.removeAt(index)
-                                                        newList.add(targetIndex, movedItem)
+                                                        val movedItem = newList.removeAt(curIdx)
+                                                        newList.add(curIdx + 1, movedItem)
                                                         editableItems = newList
-                                                        draggingItemIndex = targetIndex
-                                                        deltaX = 0f
-                                                        
-                                                        // Persist the new order
-                                                        linkPathViewModel.updateOrder(pathId, newList)
+                                                        draggingItemIndex = curIdx + 1
+                                                        deltaX -= itemWidthPx
+                                                    } else if (deltaX < -itemWidthPx * 0.5f && curIdx > 0) {
+                                                        val newList = editableItems.toMutableList()
+                                                        val movedItem = newList.removeAt(curIdx)
+                                                        newList.add(curIdx - 1, movedItem)
+                                                        editableItems = newList
+                                                        draggingItemIndex = curIdx - 1
+                                                        deltaX += itemWidthPx
                                                     }
                                                 },
-                                                onDragEnd = { draggingItemIndex = null; deltaX = 0f },
-                                                onDragCancel = { draggingItemIndex = null; deltaX = 0f }
+                                                onDragEnd = {
+                                                    val startIdx = initialDragIndex
+                                                    val endIdx = draggingItemIndex
+                                                    draggingItemIndex = null
+                                                    initialDragIndex = null
+                                                    deltaX = 0f
+                                                    if (startIdx != null && endIdx != null && startIdx != endIdx) {
+                                                        linkPathViewModel.updateOrder(pathId, editableItems)
+                                                    }
+                                                },
+                                                onDragCancel = {
+                                                    draggingItemIndex = null
+                                                    initialDragIndex = null
+                                                    deltaX = 0f
+                                                }
                                             )
                                         }
                                     }
@@ -255,42 +307,46 @@ fun PathDetailScreen(
                                 when (item) {
                                     is HomeItem.NoteItem -> {
                                         val note = item.note
-                                        var showNoteMenu by remember { mutableStateOf(false) }
-                                        Box {
-                                            PathNoteCard(
-                                                note = note,
-                                                folderName = folderNames[note.folderId],
-                                                onClick = { onNoteClick(note.id) },
-                                                onLongPress = { showNoteMenu = true },
-                                                isDragging = isDragging
-                                            )
-                                            DropdownMenu(
-                                                expanded = showNoteMenu,
-                                                onDismissRequest = { showNoteMenu = false }
-                                            ) {
-                                                DropdownMenuItem(
-                                                    text = { Text(if (note.isLocked) "Unlock" else "Lock") },
-                                                    onClick = {
-                                                        showNoteMenu = false
-                                                        if (note.isLocked) {
-                                                            noteViewModel.toggleLock(note)
-                                                        } else {
-                                                            noteToLock = note
-                                                            if (lockedPin == null) showPinSetupForNote = true
-                                                            else showPinEntryForNote = true
-                                                        }
-                                                    }
-                                                )
-                                            }
-                                        }
+                                        PathNoteCard(
+                                            note = note,
+                                            folderName = folderNames[note.folderId],
+                                            onClick = { onNoteClick(note.id) },
+                                            onLockToggle = {
+                                                if (note.isLocked) {
+                                                    noteViewModel.toggleLock(note)
+                                                } else {
+                                                    noteToLock = note
+                                                    if (lockedPin == null) showPinSetupForNote = true
+                                                    else showPinEntryForNote = true
+                                                }
+                                            },
+                                            onUnstaple = {
+                                                linkPathViewModel.unstapleNote(note.id)
+                                            },
+                                            isDragging = isDragging
+                                        )
                                     }
                                     is HomeItem.GroupItem -> {
-                                        // Expanded above
+                                        // Flattened into note items in LaunchedEffect
                                     }
                                 }
                                 
                                 if (index < filteredItems.size - 1) {
                                     HorizontalStapleConnector()
+                                }
+                            }
+                        }
+
+                        if (searchQuery.isEmpty()) {
+                            item(key = "add_note_end_card") {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.animateItem()
+                                ) {
+                                    if (filteredItems.isNotEmpty()) {
+                                        HorizontalStapleConnector()
+                                    }
+                                    AddNoteStapleCard(onClick = { createAndAppendNote() })
                                 }
                             }
                         }
@@ -425,11 +481,18 @@ fun PathNoteCard(
     note: Note,
     folderName: String?,
     onClick: () -> Unit,
-    onLongPress: () -> Unit = {},
-    isDragging: Boolean
+    onLockToggle: () -> Unit = {},
+    onUnstaple: (() -> Unit)? = null,
+    isDragging: Boolean = false,
+    displayTitle: String? = null
 ) {
     val elevation by animateDpAsState(if (isDragging) 12.dp else 4.dp, label = "elev")
-    val scale by animateFloatAsState(if (isDragging) 1.05f else 1f, label = "scale")
+    val scale by animateFloatAsState(if (isDragging) 1.08f else 1f, label = "scale")
+    var showMenu by remember { mutableStateOf(false) }
+
+    val displayData = remember(note, displayTitle) {
+        NoteDisplayUtils.resolveNoteDisplayData(note, displayTitle)
+    }
 
     Card(
         modifier = Modifier
@@ -438,42 +501,121 @@ fun PathNoteCard(
             .scale(scale)
             .pointerInput(Unit) {
                 detectTapGestures(
-                    onTap = { onClick() },
-                    onLongPress = { onLongPress() }
+                    onTap = { onClick() }
                 )
             },
         shape = RoundedCornerShape(22.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = elevation)
     ) {
-        Column(modifier = Modifier.padding(12.dp).fillMaxSize()) {
-            Text(
-                text = note.title.ifEmpty { "Untitled" },
-                fontWeight = FontWeight.Bold,
-                maxLines = 2,
-                style = MaterialTheme.typography.titleSmall
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = note.content,
-                fontSize = 11.sp,
-                maxLines = 4,
-                modifier = Modifier.weight(1f),
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            folderName?.let {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.padding(12.dp).fillMaxSize()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "📁 $it",
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        maxLines = 1
+                        text = displayData.displayTitle,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f)
                     )
+                    
+                    Box {
+                        IconButton(
+                            onClick = { showMenu = true },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = "Options",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(if (note.isLocked) "Unlock" else "Lock") },
+                                onClick = {
+                                    showMenu = false
+                                    onLockToggle()
+                                }
+                            )
+                            if (onUnstaple != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Remove from Staple") },
+                                    onClick = {
+                                        showMenu = false
+                                        onUnstaple()
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = displayData.displayContent,
+                    fontSize = 11.sp,
+                    maxLines = 4,
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                folderName?.let {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    ) {
+                        Text(
+                            text = "📁 $it",
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            maxLines = 1
+                        )
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun AddNoteStapleCard(onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .width(160.dp)
+            .aspectRatio(1f)
+            .clickable { onClick() },
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = "Add Note to Staple",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Add Note",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold
+            )
         }
     }
 }

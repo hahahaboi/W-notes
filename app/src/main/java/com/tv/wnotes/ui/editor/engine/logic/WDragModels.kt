@@ -22,8 +22,18 @@ sealed interface WDragEvent {
     data class DropExecuted(
         val sourceRanges: List<WSelectionRange>, 
         val targetPoint: WSelectionPoint,
-        val virtualLineCount: Int = 0
+        val virtualLineCount: Int = 0,
+        val isCopy: Boolean = false
     ) : WDragEvent
+
+    data class CrossTabDropExecuted(
+        val sourceTabId: Long,
+        val targetTabId: Long,
+        val sourceRanges: List<WSelectionRange>,
+        val targetPoint: WSelectionPoint,
+        val isCopy: Boolean = false
+    ) : WDragEvent
+
     data object DragCancelled : WDragEvent
 }
 

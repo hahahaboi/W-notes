@@ -25,36 +25,55 @@ object WSelectionManager {
     /**
      * Normalizes a range ensuring anchor offset <= focus offset if in the same block,
      * or anchor block comes before focus block in the document.
+     * Hardened to never reorder or touch ranges with unresolvable block IDs.
      */
     fun normalize(range: WSelectionRange, blocks: List<WBlock>): WSelectionRange {
+        val anchorIsTitle = range.anchor.blockId == "W_NOTE_TITLE"
+        val focusIsTitle = range.focus.blockId == "W_NOTE_TITLE"
+
+        // Title is a virtual block that always precedes document blocks.
+        if (anchorIsTitle || focusIsTitle) {
+            return if (comparePoints(range.anchor, range.focus, blocks) <= 0) {
+                range
+            } else {
+                WSelectionRange(range.focus, range.anchor, range.id)
+            }
+        }
+
         val anchorIndex = blocks.indexOfFirst { it.id == range.anchor.blockId }
         val focusIndex = blocks.indexOfFirst { it.id == range.focus.blockId }
+
+        // Never attempt to reorder a range when one of its blocks no longer exists.
+        // Reconciliation is responsible for removing such ranges.
+        if (anchorIndex < 0 || focusIndex < 0) return range
 
         return when {
             anchorIndex < focusIndex -> range
             anchorIndex > focusIndex -> WSelectionRange(range.focus, range.anchor, range.id)
-            else -> {
-                // Same block
-                if (range.anchor.offset <= range.focus.offset) range
-                else WSelectionRange(range.focus, range.anchor, range.id)
-            }
+            range.anchor.offset <= range.focus.offset -> range
+            else -> WSelectionRange(range.focus, range.anchor, range.id)
         }
     }
 
     /**
      * Selects an entire word at the given point.
      */
-    fun selectWord(point: WSelectionPoint, blocks: List<WBlock>): WSelectionState {
-        val block = blocks.find { it.id == point.blockId }
-        if (block !is WTextContainer) return collapseTo(point)
-        val text = block.text
+    fun selectWord(point: WSelectionPoint, blocks: List<WBlock>, title: String = ""): WSelectionState {
+        val text = if (point.blockId == "W_NOTE_TITLE") {
+            title
+        } else {
+            val block = blocks.find { it.id == point.blockId }
+            if (block !is WTextContainer) return collapseTo(point)
+            block.text
+        }
+
         if (text.isEmpty()) return collapseTo(point)
 
         val offset = point.offset.coerceIn(0, text.length)
-        
+
         var start = offset
         while (start > 0 && !isSeparator(text[start - 1])) start--
-        
+
         var end = offset
         while (end < text.length && !isSeparator(text[end])) end++
 
@@ -75,11 +94,17 @@ object WSelectionManager {
 
     /**
      * Selects an entire paragraph (block) at the given point.
+     * Hardened to use actual text length, never Int.MAX_VALUE.
      */
-    fun selectParagraph(point: WSelectionPoint): WSelectionState {
+    fun selectParagraph(
+        point: WSelectionPoint,
+        blocks: List<WBlock>,
+        title: String = ""
+    ): WSelectionState {
+        val textLength = textLengthFor(point.blockId, blocks, title) ?: return collapseTo(point)
         val range = WSelectionRange(
             WSelectionPoint(point.blockId, 0),
-            WSelectionPoint(point.blockId, Int.MAX_VALUE)
+            WSelectionPoint(point.blockId, textLength)
         )
         return WSelectionState(
             ranges = listOf(range),
@@ -90,18 +115,24 @@ object WSelectionManager {
     }
 
     /**
-     * Selects the entire document.
+     * Selects the entire document, including the title.
      */
-    fun selectAll(blocks: List<WBlock>): WSelectionState {
-        if (blocks.isEmpty()) return WSelectionState()
+    fun selectAll(blocks: List<WBlock>, title: String = ""): WSelectionState {
+        val firstBlock = blocks.firstOrNull { it is WTextContainer }
+        val firstPoint = if (firstBlock != null) {
+            WSelectionPoint(firstBlock.id, 0)
+        } else {
+            WSelectionPoint("W_NOTE_TITLE", 0)
+        }
         
-        val firstBlock = blocks.first()
-        val lastBlock = blocks.last()
-        
-        val range = WSelectionRange(
-            WSelectionPoint(firstBlock.id, 0),
-            WSelectionPoint(lastBlock.id, Int.MAX_VALUE)
-        )
+        val lastBlock = blocks.lastOrNull { it is WTextContainer }
+        val lastPoint = if (lastBlock != null) {
+            WSelectionPoint(lastBlock.id, (lastBlock as WTextContainer).text.length)
+        } else {
+            WSelectionPoint("W_NOTE_TITLE", title.length)
+        }
+
+        val range = WSelectionRange(firstPoint, lastPoint)
         return WSelectionState(
             ranges = listOf(range),
             activeRangeId = range.id,
@@ -114,13 +145,13 @@ object WSelectionManager {
      * Extends the current selection to a new point.
      * If the mode is WORD, it snaps the focus to the nearest word boundary.
      */
-    fun extendSelection(currentState: WSelectionState, newFocus: WSelectionPoint, blocks: List<WBlock>): WSelectionState {
+    fun extendSelection(currentState: WSelectionState, newFocus: WSelectionPoint, blocks: List<WBlock>, title: String = ""): WSelectionState {
         if (currentState.ranges.isEmpty()) return collapseTo(newFocus)
-        
+
         val lastRange = currentState.ranges.last()
-        
+
         val snappedFocus = if (currentState.depth == WSelectionDepth.WORD) {
-            val range = getWordBoundaries(newFocus, blocks)
+            val range = getWordBoundaries(newFocus, blocks, title)
             // If dragging forward, snap to word end. If backward, snap to word start.
             // We compare normalized positions to determine direction relative to anchor.
             val normalizedDir = comparePoints(newFocus, lastRange.anchor, blocks)
@@ -131,9 +162,9 @@ object WSelectionManager {
 
         val newRanges = currentState.ranges.toMutableList()
         newRanges[newRanges.size - 1] = lastRange.copy(focus = snappedFocus)
-        
+
         return currentState.copy(
-            ranges = newRanges, 
+            ranges = newRanges,
             isActive = true,
             depth = if (currentState.depth == WSelectionDepth.NONE) WSelectionDepth.CHARACTER else currentState.depth
         )
@@ -141,22 +172,33 @@ object WSelectionManager {
 
     /**
      * Finds the start and end of the word at the given point.
+     * Hardened to never crash on missing block IDs or title.
      */
-    fun getWordBoundaries(point: WSelectionPoint, blocks: List<WBlock>): WSelectionRange {
-        val block = blocks.find { it.id == point.blockId }
-        if (block !is WTextContainer) return WSelectionRange(point, point)
-        val text = block.text
-        if (text.isEmpty()) return WSelectionRange(point, point)
+    fun getWordBoundaries(point: WSelectionPoint, blocks: List<WBlock>, title: String = ""): WSelectionRange {
+        val text = if (point.blockId == "W_NOTE_TITLE") {
+            title
+        } else {
+            val block = blocks.find { it.id == point.blockId }
+            if (block !is WTextContainer) return WSelectionRange(point, point)
+            block.text
+        }
+
+        if (text.isEmpty()) {
+            val safeOffset = if (point.blockId == "W_NOTE_TITLE") 0 else point.offset.coerceAtLeast(0)
+            return WSelectionRange(
+                WSelectionPoint(point.blockId, safeOffset),
+                WSelectionPoint(point.blockId, safeOffset)
+            )
+        }
 
         val offset = point.offset.coerceIn(0, text.length)
-        
+
         var start = offset
         while (start > 0 && !isSeparator(text[start - 1])) start--
-        
+
         var end = offset
         while (end < text.length && !isSeparator(text[end])) end++
 
-        // Handle case where we click on a separator
         if (start == end && end < text.length) end++
 
         return WSelectionRange(
@@ -168,31 +210,58 @@ object WSelectionManager {
     /**
      * Compares two points in the document.
      * Returns > 0 if p1 > p2, < 0 if p1 < p2, 0 if equal.
+     * Hardened to never treat unknown block IDs as valid positions.
      */
-    private fun comparePoints(p1: WSelectionPoint, p2: WSelectionPoint, blocks: List<WBlock>): Int {
-        if (p1.blockId == p2.blockId) return p1.offset - p2.offset
-        
+    fun comparePoints(p1: WSelectionPoint, p2: WSelectionPoint, blocks: List<WBlock>): Int {
+        if (p1.blockId == p2.blockId) return p1.offset.compareTo(p2.offset)
+        if (p1.blockId == "W_NOTE_TITLE") return -1
+        if (p2.blockId == "W_NOTE_TITLE") return 1
+
         val idx1 = blocks.indexOfFirst { it.id == p1.blockId }
         val idx2 = blocks.indexOfFirst { it.id == p2.blockId }
-        return idx1 - idx2
+
+        // Unknown blocks must not be treated as valid document positions.
+        // Keep the comparison deterministic without throwing or producing huge/invalid ranges.
+        if (idx1 < 0 || idx2 < 0) {
+            return when {
+                idx1 == idx2 -> 0
+                idx1 < 0 -> -1
+                else -> 1
+            }
+        }
+
+        return idx1.compareTo(idx2)
     }
 
     /**
-     * Validates and clamps selection offsets against actual block content.
+     * Removes ranges that no longer belong to the current document revision.
+     * Invalid ranges are never coerced: doing so would highlight different text.
      */
-    fun validate(state: WSelectionState, blocks: List<WBlock>): WSelectionState {
-        val validatedRanges = state.ranges.map { range ->
-            val anchor = clampPoint(range.anchor, blocks)
-            val focus = clampPoint(range.focus, blocks)
-            WSelectionRange(anchor, focus)
+    fun reconcile(state: WSelectionState, blocks: List<WBlock>, title: String = ""): WSelectionState {
+        val validRanges = state.ranges.mapNotNull { range ->
+            if (!isValidPoint(range.anchor, blocks, title) || !isValidPoint(range.focus, blocks, title)) {
+                null
+            } else {
+                normalize(range, blocks)
+            }
         }
-        return state.copy(ranges = validatedRanges)
+        val activeRangeId = state.activeRangeId?.takeIf { id -> validRanges.any { it.id == id } }
+            ?: validRanges.lastOrNull()?.id
+        return state.copy(
+            ranges = validRanges,
+            activeRangeId = activeRangeId,
+            isActive = state.isActive && validRanges.isNotEmpty()
+        )
     }
 
-    private fun clampPoint(point: WSelectionPoint, blocks: List<WBlock>): WSelectionPoint {
-        val block = blocks.find { it.id == point.blockId } ?: return point
-        val maxOffset = if (block is WTextContainer) block.text.length else 0
-        return point.copy(offset = point.offset.coerceIn(0, maxOffset))
+    fun isValidPoint(point: WSelectionPoint, blocks: List<WBlock>, title: String = ""): Boolean {
+        val textLength = textLengthFor(point.blockId, blocks, title) ?: return false
+        return point.offset in 0..textLength
+    }
+
+    private fun textLengthFor(blockId: String, blocks: List<WBlock>, title: String): Int? = when (blockId) {
+        "W_NOTE_TITLE" -> title.length
+        else -> (blocks.find { it.id == blockId } as? WTextContainer)?.text?.length
     }
 
     private fun isSeparator(c: Char): Boolean {
@@ -284,40 +353,40 @@ object WSelectionManager {
 
     fun mergeOverlappingSelections(ranges: List<WSelectionRange>, blocks: List<WBlock>): List<WSelectionRange> {
         if (ranges.size <= 1) return ranges
-        
+
         val result = mutableListOf<WSelectionRange>()
-        
+
         for (range in ranges) {
             val normalizedNew = normalize(range, blocks)
             var merged = false
-            
+
             for (i in result.indices) {
                 val existing = result[i]
                 val normalizedExisting = normalize(existing, blocks)
-                
+
                 // Check for overlap or adjacency
                 // Two ranges overlap if:
                 // next.anchor is before or at current.focus AND current.anchor is before or at next.focus
                 val overlap = comparePoints(normalizedNew.anchor, normalizedExisting.focus, blocks) <= 0 &&
                              comparePoints(normalizedExisting.anchor, normalizedNew.focus, blocks) <= 0
-                
+
                 if (overlap) {
                     val newAnchor = if (comparePoints(normalizedNew.anchor, normalizedExisting.anchor, blocks) < 0)
                         normalizedNew.anchor else normalizedExisting.anchor
                     val newFocus = if (comparePoints(normalizedNew.focus, normalizedExisting.focus, blocks) > 0)
                         normalizedNew.focus else normalizedExisting.focus
-                    
+
                     result[i] = WSelectionRange(newAnchor, newFocus, existing.id)
                     merged = true
                     break
                 }
             }
-            
+
             if (!merged) {
                 result.add(range)
             }
         }
-        
+
         return result
     }
 
@@ -341,20 +410,48 @@ object WSelectionManager {
     }
 
     /**
-     * Extracts plain text from all selected ranges, preserving newlines between blocks.
-     * Hardened to handle multi-block, multi-line, and overlapping selections.
+     * Extracts blocks from the selection, preserving spans and block types.
      */
-    fun getSelectedText(state: WSelectionState, blocks: List<WBlock>): String {
-        if (!state.isActive || state.ranges.isEmpty()) return ""
-        
-        // 1. Normalize and merge to avoid double-extracting text from overlapping ranges
-        val mergedRanges = mergeOverlappingSelections(state.ranges, blocks)
-        val sortedRanges = normalizeSelectionOrder(mergedRanges, blocks)
-        
-        val sb = StringBuilder()
+    fun getSelectedBlocks(state: WSelectionState, blocks: List<WBlock>, title: String = ""): List<WBlock> {
+        if (!state.isActive || state.ranges.isEmpty()) return emptyList()
 
-        sortedRanges.forEachIndexed { rangeIndex, range ->
+        val validRanges = state.ranges.mapNotNull { range ->
+            if (isValidPoint(range.anchor, blocks, title) && isValidPoint(range.focus, blocks, title)) {
+                normalize(range, blocks)
+            } else {
+                null
+            }
+        }
+
+        if (validRanges.isEmpty()) return emptyList()
+
+        val mergedRanges = mergeOverlappingSelections(validRanges, blocks)
+        val sortedRanges = normalizeSelectionOrder(mergedRanges, blocks)
+        val result = mutableListOf<WBlock>()
+
+        sortedRanges.forEach { range ->
             val normalized = normalize(range, blocks)
+
+            if (normalized.anchor.blockId == "W_NOTE_TITLE") {
+                val start = normalized.anchor.offset.coerceIn(0, title.length)
+                val end = if (normalized.focus.blockId == "W_NOTE_TITLE") {
+                    normalized.focus.offset.coerceIn(0, title.length)
+                } else {
+                    title.length
+                }.coerceIn(0, title.length)
+                
+                if (start < end) {
+                    result.add(
+                        com.tv.wnotes.ui.editor.engine.model.WTextBlock(
+                            id = java.util.UUID.randomUUID().toString(),
+                            text = title.substring(start, end),
+                            type = com.tv.wnotes.ui.editor.engine.model.TextBlockType.H1
+                        )
+                    )
+                }
+                if (normalized.focus.blockId == "W_NOTE_TITLE") return@forEach
+            }
+
             val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
             val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
 
@@ -363,38 +460,106 @@ object WSelectionManager {
                     val block = blocks[i]
                     if (block !is WTextContainer) continue
 
-                    // Calculate offsets for this specific block
                     val textLen = block.text.length
                     val start = if (i == startIdx) normalized.anchor.offset.coerceIn(0, textLen) else 0
                     val end = if (i == endIdx) normalized.focus.offset.coerceIn(0, textLen) else textLen
-                    
+
                     if (start < end) {
                         val text = block.text.substring(start, end)
-                        sb.append(text)
-                    }
-                    
-                    // Add newline if we are moving to another block within the SAME range
-                    if (i < endIdx) {
-                        sb.append("\n")
+                        val spans = block.spans.filter { it.start < end && it.end > start }
+                            .map { span ->
+                                val s = maxOf(span.start, start) - start
+                                val e = minOf(span.end, end) - start
+                                span.copy(start = s, end = e)
+                            }
+                        
+                        val newBlock = when (block) {
+                            is com.tv.wnotes.ui.editor.engine.model.WTextBlock -> block.copy(id = java.util.UUID.randomUUID().toString(), text = text, spans = spans)
+                            is com.tv.wnotes.ui.editor.engine.model.WChecklistBlock -> block.copy(id = java.util.UUID.randomUUID().toString(), text = text, spans = spans)
+                            else -> com.tv.wnotes.ui.editor.engine.model.WTextBlock(id = java.util.UUID.randomUUID().toString(), text = text, spans = spans)
+                        }
+                        result.add(newBlock)
                     }
                 }
             }
-            
-            // Join disjoint ranges with double newline for logical separation
-            if (rangeIndex < sortedRanges.size - 1) {
-                sb.append("\n\n")
+        }
+
+        return result
+    }
+
+    /**
+     * Extracts plain text from all selected ranges, preserving newlines between blocks.
+     * Hardened to handle multi-block, multi-line, and overlapping selections.
+     */
+    fun getSelectedText(state: WSelectionState, blocks: List<WBlock>): String {
+        return getSelectedText(state, blocks, "")
+    }
+
+    fun getSelectedText(state: WSelectionState, blocks: List<WBlock>, title: String): String {
+        if (!state.isActive || state.ranges.isEmpty()) return ""
+
+        val validRanges = state.ranges.mapNotNull { range ->
+            if (isValidPoint(range.anchor, blocks, title) && isValidPoint(range.focus, blocks, title)) {
+                normalize(range, blocks)
+            } else {
+                null
             }
         }
-        
+
+        if (validRanges.isEmpty()) return ""
+
+        val mergedRanges = mergeOverlappingSelections(validRanges, blocks)
+        val sortedRanges = normalizeSelectionOrder(mergedRanges, blocks)
+        val sb = StringBuilder()
+
+        sortedRanges.forEachIndexed { rangeIndex, range ->
+            val normalized = normalize(range, blocks)
+
+            if (normalized.anchor.blockId == "W_NOTE_TITLE") {
+                val start = normalized.anchor.offset.coerceIn(0, title.length)
+                val end = normalized.focus.offset.coerceIn(0, title.length)
+                if (start < end) sb.append(title.substring(start, end))
+
+                if (normalized.focus.blockId != "W_NOTE_TITLE") {
+                    sb.append("\n")
+                } else if (rangeIndex < sortedRanges.size - 1) {
+                    sb.append("\n\n")
+                }
+
+                if (normalized.focus.blockId == "W_NOTE_TITLE") return@forEachIndexed
+            }
+
+            val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+            val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+
+            // A stale range can survive a document mutation between frames. Ignore it
+            // instead of feeding invalid offsets into text-layout code elsewhere.
+            if (startIdx < 0 || endIdx < 0 || startIdx > endIdx) return@forEachIndexed
+
+            for (i in startIdx..endIdx) {
+                val block = blocks[i]
+                if (block !is WTextContainer) continue
+
+                val textLen = block.text.length
+                val start = if (i == startIdx) normalized.anchor.offset.coerceIn(0, textLen) else 0
+                val end = if (i == endIdx) normalized.focus.offset.coerceIn(0, textLen) else textLen
+
+                if (start < end) sb.append(block.text.substring(start, end))
+                if (i < endIdx) sb.append("\n")
+            }
+
+            if (rangeIndex < sortedRanges.size - 1) sb.append("\n\n")
+        }
+
         return sb.toString()
     }
 
     /**
-     * Generates a concise title from raw text, adhering to UI length constraints.
+     * Generates a concise label from raw text, adhering to UI length constraints.
      */
-    fun generateTabTitle(text: String, maxLength: Int = 25): String {
+    fun generateLabel(text: String, maxLength: Int = 25): String {
         val singleLine = text.replace("\n", " ").replace("\r", "").trim()
-        if (singleLine.isEmpty()) return "New Tab"
+        if (singleLine.isEmpty()) return "Snippet"
         if (singleLine.length <= maxLength) return singleLine
         
         return singleLine.take(maxLength - 3).trim() + "..."

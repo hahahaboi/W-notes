@@ -17,6 +17,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
@@ -32,6 +34,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -41,6 +44,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,6 +53,8 @@ import androidx.compose.ui.zIndex
 import com.tv.wnotes.data.local.entity.Note
 import com.tv.wnotes.data.pref.PreferenceManager
 import com.tv.wnotes.ui.components.*
+import com.tv.wnotes.ui.theme.BrandGradient
+import com.tv.wnotes.util.NoteDisplayUtils
 import com.tv.wnotes.util.TitleUtils
 import com.tv.wnotes.viewmodel.FolderViewModel
 import com.tv.wnotes.viewmodel.LinkPathViewModel
@@ -158,15 +164,24 @@ fun HomeScreen(
     val scope = rememberCoroutineScope()
     val gridState = rememberLazyGridState()
 
+    val dragCoordinator = remember { WorkspaceDragCoordinator() }
+    var groupingTargetItem by remember { mutableStateOf<Pair<HomeItem, String?>?>(null) }
+
     val folderNames = remember(folders) { folders.associateBy { it.id } }
     val pathNames = remember(notePathInfo) { notePathInfo.associate { it.noteId to it.pathName } }
     val groupPathNames = remember(groupPathInfo) { groupPathInfo.associate { it.groupId to it.pathName } }
 
-    val displayItems: List<HomeItem> = remember(homeItems, searchResults, searchQuery) {
-        if (searchQuery.isNotEmpty()) {
-            searchResults
+    val displayItems: List<HomeItem> = remember(homeItems, searchResults, searchQuery, sortOption) {
+        val baseItems = if (searchQuery.isNotEmpty()) searchResults else homeItems
+        if (sortOption == SectionSortOption.INCOMPLETE) {
+            baseItems.filter { item ->
+                when (item) {
+                    is HomeItem.NoteItem -> item.note.hasGoal && item.note.content.length < item.note.goalTargetLength
+                    is HomeItem.GroupItem -> item.groupWithNotes.notes.any { it.hasGoal && it.content.length < it.goalTargetLength }
+                }
+            }
         } else {
-            homeItems
+            baseItems
         }
     }
 
@@ -176,609 +191,698 @@ fun HomeScreen(
             showQuickNoteInput = false
             quickNoteTargetId = null
         }
-        if (selectionState.totalCount > 1) contextMenuNoteId = null
     }
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = { 
-                    val totalSelected = selectedIds.size + selectedGroupIds.size
-                    val titleText = when {
-                        totalSelected == 0 -> "W Notes"
-                        else -> "$totalSelected selected"
-                    }
-                    Text(
-                        text = titleText,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontFamily = FontFamily.SansSerif
-                    ) 
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (selectedIds.isNotEmpty() || selectedGroupIds.isNotEmpty()) {
-                            viewModel.clearSelection()
-                        } else {
-                            onOpenDrawer()
-                        }
-                    }) {
-                        if (selectedIds.isNotEmpty() || selectedGroupIds.isNotEmpty()) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear")
-                        } else {
-                            WAnimatedIcon(
-                                progress = drawerProgress,
-                                modifier = Modifier.size(24.dp),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    if (selectedIds.isNotEmpty() || selectedGroupIds.isNotEmpty()) {
-                        TextButton(onClick = { 
-                            viewModel.clearSelection() 
-                        }) {
-                            Text("Cancel", color = MaterialTheme.colorScheme.error)
-                        }
+    val handleDrop: (HomeItem, String?) -> Unit = { dragged, targetId ->
+        if (targetId != null) {
+            if (targetId.startsWith("note_")) {
+                groupingTargetItem = dragged to targetId
+                showGroupNameDialog = true
+            } else if (targetId.startsWith("group_")) {
+                val targetGroupId = targetId.removePrefix("group_").toLong()
+                if (dragged is HomeItem.NoteItem) {
+                    scope.launch {
+                        viewModel.addNoteToGroupSync(dragged.note.id, targetGroupId)
+                        viewModel.clearSelection()
                     }
                 }
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { onNavigateToEditor(null) },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                shape = CircleShape
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Add Note")
             }
         }
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { viewModel.updateSearchQuery(it) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    placeholder = { Text("Search by text, 'mention ...', or '100 words'") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    shape = RoundedCornerShape(16.dp),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent
-                    )
-                )
+    }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (searchQuery.isEmpty()) "Recent Notes" else "Search Results",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                    
-                    Box {
-                        TextButton(onClick = { showSortMenu = true }) {
-                            Text("Sort ▼")
+    val washColors = listOf(
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+        MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f),
+        Color.Transparent
+    )
+
+    CompositionLocalProvider(LocalWorkspaceDragCoordinator provides dragCoordinator) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .background(Brush.verticalGradient(washColors, endY = 1100f))
+        ) {
+        Scaffold(
+            containerColor = Color.Transparent,
+            topBar = {
+                CenterAlignedTopAppBar(
+                    title = { 
+                        val totalSelected = selectedIds.size + selectedGroupIds.size
+                        val titleText = when {
+                            totalSelected == 0 -> "W Notes"
+                            else -> "$totalSelected selected"
                         }
-                        DropdownMenu(
-                            expanded = showSortMenu,
-                            onDismissRequest = { showSortMenu = false }
-                        ) {
-                            SectionSortOption.entries.forEach { option ->
-                                DropdownMenuItem(
-                                    text = { Text(option.label) },
-                                    onClick = {
-                                        scope.launch {
-                                            preferenceManager.saveSectionSort("home", option.name)
-                                        }
-                                        showSortMenu = false
-                                    }
+                        Text(
+                            text = titleText,
+                            style = if (totalSelected == 0)
+                                MaterialTheme.typography.headlineMedium.merge(TextStyle(brush = BrandGradient))
+                            else MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.SansSerif,
+                            letterSpacing = (-0.5).sp
+                        ) 
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = Color.Transparent
+                    ),
+                    navigationIcon = {
+                        IconButton(onClick = {
+                            if (selectedIds.isNotEmpty() || selectedGroupIds.isNotEmpty()) {
+                                viewModel.clearSelection()
+                            } else {
+                                onOpenDrawer()
+                            }
+                        }) {
+                            if (selectedIds.isNotEmpty() || selectedGroupIds.isNotEmpty()) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear")
+                            } else {
+                                WAnimatedIcon(
+                                    progress = drawerProgress,
+                                    modifier = Modifier.size(24.dp),
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }
-                    }
-                }
-
-                Box(modifier = Modifier.weight(1f)) {
-                    if (displayItems.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(
-                                text = if (searchQuery.isEmpty()) 
-                                    "No notes yet. Tap the + button to create your first note." 
-                                    else "No results found.",
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                modifier = Modifier.padding(32.dp)
-                            )
+                    },
+                    actions = {
+                        if (selectedIds.isNotEmpty() || selectedGroupIds.isNotEmpty()) {
+                            TextButton(onClick = { 
+                                viewModel.clearSelection() 
+                            }) {
+                                Text("Cancel", color = MaterialTheme.colorScheme.error)
+                            }
                         }
-                    } else {
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            LazyVerticalGrid(
-                                state = gridState,
-                                columns = GridCells.Adaptive(minSize = 170.dp),
-                                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                                modifier = Modifier.fillMaxSize()
+                    }
+                )
+            },
+            floatingActionButton = {
+                FloatingActionButton(
+                    onClick = { onNavigateToEditor(null) },
+                    containerColor = Color.Transparent,
+                    contentColor = Color.White,
+                    elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp, 0.dp, 0.dp),
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .shadow(14.dp, CircleShape, spotColor = MaterialTheme.colorScheme.primary)
+                        .background(BrandGradient, CircleShape)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Add Note", modifier = Modifier.size(28.dp))
+                }
+            }
+        ) { padding ->
+            Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { viewModel.updateSearchQuery(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .shadow(10.dp, RoundedCornerShape(20.dp), spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                        placeholder = { Text("Search by text, 'mention ...', or '100 words'", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                        trailingIcon = if (searchQuery.isNotEmpty()) {
+                            {
+                                IconButton(onClick = { viewModel.updateSearchQuery("") }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                                }
+                            }
+                        } else null,
+                        singleLine = true,
+                        shape = RoundedCornerShape(20.dp),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                            focusedIndicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                            unfocusedIndicatorColor = Color.Transparent
+                        )
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(width = 4.dp, height = 20.dp)
+                                    .background(BrandGradient, RoundedCornerShape(2.dp))
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = if (searchQuery.isEmpty()) "Recent Notes" else "Search Results",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (displayItems.isNotEmpty()) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Surface(
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                ) {
+                                    Text(
+                                        text = displayItems.size.toString(),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                        
+                        Box {
+                            Surface(
+                                onClick = { showSortMenu = true },
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                             ) {
-                                items(
-                                    items = displayItems, 
-                                    key = { item: HomeItem -> item.id },
-                                    span = { item: HomeItem ->
-                                        when (item) {
-                                            is HomeItem.GroupItem -> GridItemSpan(maxLineSpan)
-                                            is HomeItem.NoteItem -> GridItemSpan(1)
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.SwapVert, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(sortOption.label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                            DropdownMenu(
+                                expanded = showSortMenu,
+                                onDismissRequest = { showSortMenu = false }
+                            ) {
+                                SectionSortOption.entries.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label) },
+                                        onClick = {
+                                            scope.launch {
+                                                preferenceManager.saveSectionSort("home", option.name)
+                                            }
+                                            showSortMenu = false
                                         }
-                                    }
-                                ) { item: HomeItem ->
-                                    when (item) {
-                                        is HomeItem.NoteItem -> {
-                                            val note = item.note
-                                            Box {
-                                                SwipeSelectableNoteCard(
-                                                    note = note,
-                                                    folderName = folderNames[note.folderId]?.name,
-                                                    pathName = pathNames[note.id],
-                                                    selected = note.id in selectedIds,
-                                                    isSelectionMode = selectedIds.isNotEmpty(),
-                                                    onClick = {
-                                                        if (selectedIds.isNotEmpty()) {
-                                                            viewModel.toggleSelection(note.id)
-                                                        } else {
-                                                            onNavigateToEditor(note.id)
-                                                        }
-                                                    },
-                                                    onLongPress = {
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Box(modifier = Modifier.weight(1f)) {
+                        if (displayItems.isEmpty()) {
+                            HomeEmptyState(
+                                isSearching = searchQuery.isNotEmpty(),
+                                onCreate = { onNavigateToEditor(null) }
+                            )
+                        } else {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                LazyVerticalGrid(
+                                    state = gridState,
+                                    columns = GridCells.Adaptive(minSize = 170.dp),
+                                    contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    items(
+                                        items = displayItems, 
+                                        key = { item: HomeItem -> item.id },
+                                        span = { item: HomeItem ->
+                                            when (item) {
+                                                is HomeItem.GroupItem -> GridItemSpan(maxLineSpan)
+                                                is HomeItem.NoteItem -> GridItemSpan(1)
+                                            }
+                                        }
+                                    ) { item: HomeItem ->
+                                        when (item) {
+                                            is HomeItem.NoteItem -> {
+                                                val note = item.note
+                                                Box {
+                                                    SwipeSelectableNoteCard(
+                                                        note = note,
+                                                        folderName = folderNames[note.folderId]?.name,
+                                                        pathName = pathNames[note.id],
+                                                        selected = note.id in selectedIds,
+                                                        isSelectionMode = selectedIds.isNotEmpty(),
+                                                        onClick = {
+                                                            if (selectedIds.isNotEmpty()) {
+                                                                viewModel.toggleSelection(note.id)
+                                                            } else {
+                                                                onNavigateToEditor(note.id)
+                                                            }
+                                                        },
+                                                        onLongPress = {
                                                         viewModel.addToSelection(note.id)
                                                         contextMenuNoteId = note.id
                                                     },
-                                                    onSwipeRight = { viewModel.toggleStar(note) },
-                                                    onSwipeLeft = { viewModel.moveToTrash(note) }
-                                                )
+                                                        onSwipeRight = { viewModel.toggleStar(note) },
+                                                        onSwipeLeft = { viewModel.moveToTrash(note) },
+                                                        onDrop = handleDrop
+                                                    )
 
-                                                DropdownMenu(
-                                                    expanded = contextMenuNoteId == note.id,
-                                                    onDismissRequest = { contextMenuNoteId = null },
-                                                    shape = com.tv.wnotes.ui.theme.ActionMenuShape
-                                                ) {
-                                                    DropdownMenuItem(
-                                                        text = { Text(if (note.isStarred) "Unstar" else "Star") },
-                                                        onClick = {
-                                                            viewModel.toggleStar(note)
-                                                            contextMenuNoteId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text(if (note.isPinned) "Unpin" else "Pin") },
-                                                        onClick = {
-                                                            viewModel.togglePin(note)
-                                                            contextMenuNoteId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Rename") },
-                                                        onClick = {
-                                                            showRenameDialog = note
-                                                            contextMenuNoteId = null
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Duplicate") },
-                                                        onClick = {
-                                                            viewModel.duplicate(note)
-                                                            contextMenuNoteId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Add to Folder") },
-                                                        onClick = {
-                                                            showFolderSheet = true
-                                                            contextMenuNoteId = null
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("New Folder") },
-                                                        onClick = {
-                                                            showNewFolderDialog = true
-                                                            contextMenuNoteId = null
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Group") },
-                                                        onClick = {
-                                                            showGroupNameDialog = true
-                                                            contextMenuNoteId = null
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Staple") },
-                                                        onClick = {
-                                                            showPathSheet = true
-                                                            contextMenuNoteId = null
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("New Staple") },
-                                                        onClick = {
-                                                            showNewStapleDialog = true
-                                                            contextMenuNoteId = null
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text(if (note.isLocked) "Unlock" else "Lock") },
-                                                        onClick = {
-                                                            contextMenuNoteId = null
-                                                            if (note.isLocked) {
-                                                                viewModel.toggleLock(note)
-                                                            } else {
-                                                                noteToLock = note
-                                                                if (lockedPin == null) {
-                                                                    showPinSetupForNote = true
+                                                    DropdownMenu(
+                                                        expanded = contextMenuNoteId == note.id,
+                                                        onDismissRequest = { contextMenuNoteId = null },
+                                                        shape = com.tv.wnotes.ui.theme.ActionMenuShape
+                                                    ) {
+                                                        DropdownMenuItem(
+                                                            text = { Text(if (note.isStarred) "Unstar" else "Star") },
+                                                            onClick = {
+                                                                viewModel.toggleStar(note)
+                                                                contextMenuNoteId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text(if (note.isPinned) "Unpin" else "Pin") },
+                                                            onClick = {
+                                                                viewModel.togglePin(note)
+                                                                contextMenuNoteId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Rename") },
+                                                            onClick = {
+                                                                showRenameDialog = note
+                                                                contextMenuNoteId = null
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Duplicate") },
+                                                            onClick = {
+                                                                viewModel.duplicate(note)
+                                                                contextMenuNoteId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Add to Folder") },
+                                                            onClick = {
+                                                                showFolderSheet = true
+                                                                contextMenuNoteId = null
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("New Folder") },
+                                                            onClick = {
+                                                                showNewFolderDialog = true
+                                                                contextMenuNoteId = null
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Group") },
+                                                            onClick = {
+                                                                showGroupNameDialog = true
+                                                                contextMenuNoteId = null
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Staple") },
+                                                            onClick = {
+                                                                showPathSheet = true
+                                                                contextMenuNoteId = null
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("New Staple") },
+                                                            onClick = {
+                                                                showNewStapleDialog = true
+                                                                contextMenuNoteId = null
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text(if (note.isLocked) "Unlock" else "Lock") },
+                                                            onClick = {
+                                                                contextMenuNoteId = null
+                                                                if (note.isLocked) {
+                                                                    viewModel.toggleLock(note)
                                                                 } else {
-                                                                    showPinEntryForNote = true
+                                                                    noteToLock = note
+                                                                    if (lockedPin == null) {
+                                                                        showPinSetupForNote = true
+                                                                    } else {
+                                                                        showPinEntryForNote = true
+                                                                    }
                                                                 }
+                                                                viewModel.clearSelection()
                                                             }
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Share") },
-                                                        onClick = {
-                                                            shareNotes(context, listOf(note))
-                                                            contextMenuNoteId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Move to Trash") },
-                                                        onClick = {
-                                                            viewModel.moveToTrash(note)
-                                                            contextMenuNoteId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                }
-
-                                                if (contextMenuNoteId == note.id) {
-                                                    ContextualQuickNoteButton(
-                                                        onQuickNote = {
-                                                            quickNoteTargetId = note.id
-                                                            showQuickNoteInput = true
-                                                            contextMenuNoteId = null
-                                                        }
-                                                    )
-                                                }
-
-                                                if (quickNoteTargetId == note.id && showQuickNoteInput) {
-                                                    QuickNoteInput(
-                                                        onDismiss = { text ->
-                                                            if (text.isNotBlank()) {
-                                                                viewModel.appendQuickNote(note.id, text)
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Share") },
+                                                            onClick = {
+                                                                shareNotes(context, listOf(note))
+                                                                contextMenuNoteId = null
+                                                                viewModel.clearSelection()
                                                             }
-                                                            showQuickNoteInput = false
-                                                            quickNoteTargetId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Move to Trash") },
+                                                            onClick = {
+                                                                viewModel.moveToTrash(note)
+                                                                contextMenuNoteId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                    }
+
+                                                    if (contextMenuNoteId == note.id) {
+                                                        ContextualQuickNoteButton(
+                                                            onQuickNote = {
+                                                                quickNoteTargetId = note.id
+                                                                showQuickNoteInput = true
+                                                                contextMenuNoteId = null
+                                                            }
+                                                        )
+                                                    }
+
+                                                    if (quickNoteTargetId == note.id && showQuickNoteInput) {
+                                                        QuickNoteInput(
+                                                            onDismiss = { text ->
+                                                                if (text.isNotBlank()) {
+                                                                    viewModel.appendQuickNote(note.id, text)
+                                                                }
+                                                                showQuickNoteInput = false
+                                                                quickNoteTargetId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                    }
                                                 }
                                             }
-                                        }
-                                        is HomeItem.GroupItem -> {
-                                            val groupWithNotes = item.groupWithNotes
-                                            Box {
-                                                GroupCollageCard(
-                                                    groupWithNotes = groupWithNotes,
-                                                    selected = groupWithNotes.group.id in selectedGroupIds,
-                                                    folderName = folderNames[groupWithNotes.group.folderId]?.name,
-                                                    pathName = groupPathNames[groupWithNotes.group.id],
-                                                    onClick = { 
-                                                        if (selectedIds.isNotEmpty() || selectedGroupIds.isNotEmpty()) {
-                                                            viewModel.toggleGroupSelection(groupWithNotes.group.id)
-                                                        } else {
-                                                            onNavigateToGroup(groupWithNotes.group.id, groupWithNotes.group.name)
-                                                        }
-                                                    },
-                                                    onLongPress = {
-                                                        viewModel.addGroupToSelection(groupWithNotes.group.id)
-                                                        contextMenuGroupId = groupWithNotes.group.id
-                                                    },
-                                                    onNoteClick = { note, geometry, containerOffset ->
-                                                        animatingNoteData = NoteAnimationData(note, geometry, containerOffset)
-                                                    },
-                                                    onPreviewStart = { note, geometry, containerOffset, allNotes, geometries ->
-                                                        previewNoteData = PreviewNoteData(note, geometry, containerOffset, PreviewState.SCRUBBING, allNotes, geometries)
-                                                    },
-                                                    onPreviewChange = { note, geometry ->
-                                                        previewNoteData = previewNoteData?.copy(note = note, geometry = geometry, state = PreviewState.SCRUBBING)
-                                                    },
-                                                    onPreviewEnd = {
-                                                        previewNoteData = previewNoteData?.copy(state = PreviewState.PERSISTENT)
-                                                    }
-                                                )
-
-                                                DropdownMenu(
-                                                    expanded = contextMenuGroupId == groupWithNotes.group.id,
-                                                    onDismissRequest = { contextMenuGroupId = null },
-                                                    shape = com.tv.wnotes.ui.theme.ActionMenuShape
-                                                ) {
-                                                    DropdownMenuItem(
-                                                        text = { Text("Ungroup") },
-                                                        onClick = {
-                                                            viewModel.ungroup(groupWithNotes.group.id)
-                                                            contextMenuGroupId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text(if (groupWithNotes.group.isStarred) "Unstar" else "Star") },
-                                                        onClick = {
-                                                            viewModel.toggleGroupStar(groupWithNotes.group)
-                                                            contextMenuGroupId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text(if (groupWithNotes.group.isPinned) "Unpin" else "Pin") },
-                                                        onClick = {
-                                                            viewModel.toggleGroupPin(groupWithNotes.group)
-                                                            contextMenuGroupId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Rename") },
-                                                        onClick = {
-                                                            showGroupRenameDialog = groupWithNotes.group.id
-                                                            contextMenuGroupId = null
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Duplicate") },
-                                                        onClick = {
-                                                            viewModel.duplicateGroup(groupWithNotes)
-                                                            contextMenuGroupId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Info") },
-                                                        onClick = {
-                                                            contextMenuGroupId = null
-                                                            showInfoPanel = true
-                                                            if (groupWithNotes.group.id !in selectedGroupIds) {
-                                                                viewModel.clearSelection()
-                                                                viewModel.addGroupToSelection(groupWithNotes.group.id)
+                                            is HomeItem.GroupItem -> {
+                                                val groupWithNotes = item.groupWithNotes
+                                                Box {
+                                                    GroupCollageCard(
+                                                        groupWithNotes = groupWithNotes,
+                                                        selected = groupWithNotes.group.id in selectedGroupIds,
+                                                        folderName = folderNames[groupWithNotes.group.folderId]?.name,
+                                                        pathName = groupPathNames[groupWithNotes.group.id],
+                                                        onClick = { 
+                                                            if (selectedIds.isNotEmpty() || selectedGroupIds.isNotEmpty()) {
+                                                                viewModel.toggleGroupSelection(groupWithNotes.group.id)
+                                                            } else {
+                                                                onNavigateToGroup(groupWithNotes.group.id, groupWithNotes.group.name)
                                                             }
+                                                        },
+                                                        onLongPress = {
+                                                            viewModel.addGroupToSelection(groupWithNotes.group.id)
+                                                            contextMenuGroupId = groupWithNotes.group.id
+                                                        },
+                                                        onNoteClick = { note, geometry, containerOffset ->
+                                                            animatingNoteData = NoteAnimationData(note, geometry, containerOffset)
+                                                        },
+                                                        onPreviewStart = { note, geometry, containerOffset, allNotes, geometries ->
+                                                            previewNoteData = PreviewNoteData(note, geometry, containerOffset, PreviewState.SCRUBBING, allNotes, geometries)
+                                                        },
+                                                        onPreviewChange = { note, geometry ->
+                                                            previewNoteData = previewNoteData?.copy(note = note, geometry = geometry, state = PreviewState.SCRUBBING)
+                                                        },
+                                                        onPreviewEnd = {
+                                                            previewNoteData = previewNoteData?.copy(state = PreviewState.PERSISTENT)
                                                         }
                                                     )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Add to Folder") },
-                                                        onClick = {
-                                                            showFolderSheet = true
-                                                            contextMenuGroupId = null
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("New Folder") },
-                                                        onClick = {
-                                                            showNewFolderDialog = true
-                                                            contextMenuGroupId = null
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Staple") },
-                                                        onClick = {
-                                                            showPathSheet = true
-                                                            contextMenuGroupId = null
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("New Staple") },
-                                                        onClick = {
-                                                            showNewStapleDialog = true
-                                                            contextMenuGroupId = null
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text(if (groupWithNotes.group.isLocked) "Unlock" else "Lock") },
-                                                        onClick = {
-                                                            viewModel.toggleGroupLock(groupWithNotes.group)
-                                                            contextMenuGroupId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Share") },
-                                                        onClick = {
-                                                            shareNotes(context, groupWithNotes.notes)
-                                                            contextMenuGroupId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Move to Trash") },
-                                                        onClick = {
-                                                            viewModel.moveGroupToTrash(groupWithNotes.group)
-                                                            contextMenuGroupId = null
-                                                            viewModel.clearSelection()
-                                                        }
-                                                    )
+
+                                                    DropdownMenu(
+                                                        expanded = contextMenuGroupId == groupWithNotes.group.id,
+                                                        onDismissRequest = { contextMenuGroupId = null },
+                                                        shape = com.tv.wnotes.ui.theme.ActionMenuShape
+                                                    ) {
+                                                        DropdownMenuItem(
+                                                            text = { Text("Ungroup") },
+                                                            onClick = {
+                                                                viewModel.ungroup(groupWithNotes.group.id)
+                                                                contextMenuGroupId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text(if (groupWithNotes.group.isStarred) "Unstar" else "Star") },
+                                                            onClick = {
+                                                                viewModel.toggleGroupStar(groupWithNotes.group)
+                                                                contextMenuGroupId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text(if (groupWithNotes.group.isPinned) "Unpin" else "Pin") },
+                                                            onClick = {
+                                                                viewModel.toggleGroupPin(groupWithNotes.group)
+                                                                contextMenuGroupId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Rename") },
+                                                            onClick = {
+                                                                showGroupRenameDialog = groupWithNotes.group.id
+                                                                contextMenuGroupId = null
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Duplicate") },
+                                                            onClick = {
+                                                                viewModel.duplicateGroup(groupWithNotes)
+                                                                contextMenuGroupId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Info") },
+                                                            onClick = {
+                                                                contextMenuGroupId = null
+                                                                showInfoPanel = true
+                                                                if (groupWithNotes.group.id !in selectedGroupIds) {
+                                                                    viewModel.clearSelection()
+                                                                    viewModel.addGroupToSelection(groupWithNotes.group.id)
+                                                                }
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Add to Folder") },
+                                                            onClick = {
+                                                                showFolderSheet = true
+                                                                contextMenuGroupId = null
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("New Folder") },
+                                                            onClick = {
+                                                                showNewFolderDialog = true
+                                                                contextMenuGroupId = null
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Staple") },
+                                                            onClick = {
+                                                                showPathSheet = true
+                                                                contextMenuGroupId = null
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("New Staple") },
+                                                            onClick = {
+                                                                showNewStapleDialog = true
+                                                                contextMenuGroupId = null
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text(if (groupWithNotes.group.isLocked) "Unlock" else "Lock") },
+                                                            onClick = {
+                                                                viewModel.toggleGroupLock(groupWithNotes.group)
+                                                                contextMenuGroupId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Share") },
+                                                            onClick = {
+                                                                shareNotes(context, groupWithNotes.notes)
+                                                                contextMenuGroupId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text("Move to Trash") },
+                                                            onClick = {
+                                                                viewModel.moveGroupToTrash(groupWithNotes.group)
+                                                                contextMenuGroupId = null
+                                                                viewModel.clearSelection()
+                                                            }
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
 
-                            WScrollbar(
-                                gridState = gridState,
-                                modifier = Modifier.align(Alignment.CenterEnd)
-                            )
+                                WScrollbar(
+                                    gridState = gridState,
+                                    modifier = Modifier.align(Alignment.CenterEnd)
+                                )
+                            }
                         }
                     }
                 }
+
+                WorkspaceDragOverlay(
+                    coordinator = dragCoordinator,
+                    folderNames = folders.associate { it.id to it.name },
+                    pathNames = pathNames
+                )
+
+                MultiSelectFloatingActions(
+                    visible = selectionState !is SelectionState.None,
+                    onStar = { 
+                        viewModel.starNotes(selectedNotes)
+                        // Also star selected groups
+                        scope.launch {
+                            selectedGroupIds.forEach { groupId ->
+                                viewModel.getGroupWithNotesById(groupId).firstOrNull()?.group?.let {
+                                    viewModel.toggleGroupStar(it)
+                                }
+                            }
+                        }
+                        viewModel.clearSelection()
+                    },
+                    onTrash = {
+                        viewModel.moveNotesToTrash(selectedNotes)
+                        // Also trash selected groups
+                        scope.launch {
+                            selectedGroupIds.forEach { groupId ->
+                                viewModel.getGroupWithNotesById(groupId).firstOrNull()?.group?.let {
+                                    viewModel.moveGroupToTrash(it)
+                                }
+                            }
+                        }
+                        viewModel.clearSelection()
+                    },
+                    onShare = {
+                        // Combine all notes from selected notes and selected groups
+                        scope.launch {
+                            val allToShare = selectedNotes.toMutableList()
+                            selectedGroupIds.forEach { groupId ->
+                                viewModel.getGroupWithNotesById(groupId).firstOrNull()?.notes?.let {
+                                    allToShare.addAll(it)
+                                }
+                            }
+                            shareNotes(context, allToShare)
+                            viewModel.clearSelection()
+                        }
+                    },
+                    onFolder = { showFolderSheet = true },
+                    onPath = { showPathSheet = true },
+                    onPin = {
+                        selectedNotes.forEach { viewModel.togglePin(it) }
+                        selectedGroupIds.forEach { groupId ->
+                            scope.launch {
+                                viewModel.getGroupWithNotesById(groupId).firstOrNull()?.group?.let {
+                                    viewModel.toggleGroupPin(it)
+                                }
+                            }
+                        }
+                        viewModel.clearSelection()
+                    },
+                    onDuplicate = {
+                        selectedNotes.forEach { viewModel.duplicate(it) }
+                        selectedGroupIds.forEach { groupId ->
+                            scope.launch {
+                                viewModel.getGroupWithNotesById(groupId).firstOrNull()?.let {
+                                    viewModel.duplicateGroup(it)
+                                }
+                            }
+                        }
+                        viewModel.clearSelection()
+                    },
+                    selectedCount = selectionState.totalCount,
+                    onInfo = if (selectionState is SelectionState.SingleNote || selectionState is SelectionState.SingleGroup) ({ showInfoPanel = !showInfoPanel }) else null,
+                    onGroup = if (selectionState is SelectionState.SingleNote || selectionState is SelectionState.MultipleNotes) ({
+                        showGroupNameDialog = true
+                    }) else null,
+                    showInfoPanel = showInfoPanel,
+                    onCloseInfo = { showInfoPanel = false },
+                    infoContent = {
+                        if (selectionState is SelectionState.SingleNote) {
+                            val singleNoteState = selectionState as SelectionState.SingleNote
+                            val noteId = singleNoteState.noteId
+                            val note = allNotesList.find { it.id == noteId }
+                            note?.let {
+                                val words = if (it.content.isBlank()) 0 else it.content.trim().split(Regex("\\s+")).size
+                                Column {
+                                    Text("Words: $words", style = MaterialTheme.typography.bodyMedium)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text("Created:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.getDefault()).format(java.util.Date(it.createdAt)),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        } else if (selectionState is SelectionState.SingleGroup) {
+                            val groupId = (selectionState as SelectionState.SingleGroup).groupId
+                            val groupFlow = remember(groupId) { viewModel.getGroupWithNotesById(groupId) }
+                            val groupWithNotes by groupFlow.collectAsState(initial = null)
+                            
+                            groupWithNotes?.let {
+                                val noteCount = it.notes.size
+                                Column {
+                                    Text("Notes: $noteCount", style = MaterialTheme.typography.bodyMedium)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text("Created:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.getDefault()).format(java.util.Date(it.group.createdAt)),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
             }
 
-            MultiSelectFloatingActions(
-                visible = selectionState !is SelectionState.None,
-                onStar = { 
-                    viewModel.starNotes(selectedNotes)
-                    // Also star selected groups
-                    scope.launch {
-                        selectedGroupIds.forEach { groupId ->
-                            viewModel.getGroupWithNotesById(groupId).firstOrNull()?.group?.let {
-                                viewModel.toggleGroupStar(it)
-                            }
+            // Note Pop-out Animation Overlay
+            animatingNoteData?.let { data ->
+                NotePopOutOverlay(
+                    data = data,
+                    onAnimationComplete = {
+                        if (!data.isReturning) {
+                            onNavigateToEditor(data.note.id)
+                            // Mark as navigated away so we can trigger return animation on resume
+                            animatingNoteData = data.copy(isNavigatedAway = true)
+                        } else {
+                            animatingNoteData = null
                         }
                     }
-                    viewModel.clearSelection()
-                },
-                onTrash = {
-                    viewModel.moveNotesToTrash(selectedNotes)
-                    // Also trash selected groups
-                    scope.launch {
-                        selectedGroupIds.forEach { groupId ->
-                            viewModel.getGroupWithNotesById(groupId).firstOrNull()?.group?.let {
-                                viewModel.moveGroupToTrash(it)
-                            }
-                        }
-                    }
-                    viewModel.clearSelection()
-                },
-                onShare = {
-                    // Combine all notes from selected notes and selected groups
-                    scope.launch {
-                        val allToShare = selectedNotes.toMutableList()
-                        selectedGroupIds.forEach { groupId ->
-                            viewModel.getGroupWithNotesById(groupId).firstOrNull()?.notes?.let {
-                                allToShare.addAll(it)
-                            }
-                        }
-                        shareNotes(context, allToShare)
-                        viewModel.clearSelection()
-                    }
-                },
-                onFolder = { showFolderSheet = true },
-                onPath = { showPathSheet = true },
-                onPin = {
-                    selectedNotes.forEach { viewModel.togglePin(it) }
-                    selectedGroupIds.forEach { groupId ->
-                        scope.launch {
-                            viewModel.getGroupWithNotesById(groupId).firstOrNull()?.group?.let {
-                                viewModel.toggleGroupPin(it)
-                            }
-                        }
-                    }
-                    viewModel.clearSelection()
-                },
-                onDuplicate = {
-                    selectedNotes.forEach { viewModel.duplicate(it) }
-                    selectedGroupIds.forEach { groupId ->
-                        scope.launch {
-                            viewModel.getGroupWithNotesById(groupId).firstOrNull()?.let {
-                                viewModel.duplicateGroup(it)
-                            }
-                        }
-                    }
-                    viewModel.clearSelection()
-                },
-                selectedCount = selectionState.totalCount,
-                onInfo = if (selectionState is SelectionState.SingleNote || selectionState is SelectionState.SingleGroup) ({ showInfoPanel = !showInfoPanel }) else null,
-                onGroup = if (selectionState is SelectionState.SingleNote || selectionState is SelectionState.MultipleNotes) ({
-                    showGroupNameDialog = true
-                }) else null,
-                showInfoPanel = showInfoPanel,
-                onCloseInfo = { showInfoPanel = false },
-                infoContent = {
-                    if (selectionState is SelectionState.SingleNote) {
-                        val singleNoteState = selectionState as SelectionState.SingleNote
-                        val noteId = singleNoteState.noteId
-                        val note = allNotesList.find { it.id == noteId }
-                        note?.let {
-                            val words = if (it.content.isBlank()) 0 else it.content.trim().split(Regex("\\s+")).size
-                            Column {
-                                Text("Words: $words", style = MaterialTheme.typography.bodyMedium)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("Created:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(
-                                    java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.getDefault()).format(java.util.Date(it.createdAt)),
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                        }
-                    } else if (selectionState is SelectionState.SingleGroup) {
-                        val groupId = (selectionState as SelectionState.SingleGroup).groupId
-                        val groupFlow = remember(groupId) { viewModel.getGroupWithNotesById(groupId) }
-                        val groupWithNotes by groupFlow.collectAsState(initial = null)
-                        
-                        groupWithNotes?.let {
-                            val noteCount = it.notes.size
-                            Column {
-                                Text("Notes: $noteCount", style = MaterialTheme.typography.bodyMedium)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("Created:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(
-                                    java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.getDefault()).format(java.util.Date(it.group.createdAt)),
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                        }
-                    }
-                }
-            )
-        }
+                )
+            }
 
-        // Note Pop-out Animation Overlay
-        animatingNoteData?.let { data ->
-            NotePopOutOverlay(
-                data = data,
-                onAnimationComplete = {
-                    if (!data.isReturning) {
+            // Preview Overlay
+            previewNoteData?.let { data ->
+                NotePreviewOverlay(
+                    data = data,
+                    onDismiss = { previewNoteData = null },
+                    onNoteChange = { note, geometry ->
+                        previewNoteData = previewNoteData?.copy(note = note, geometry = geometry)
+                    },
+                    onExpand = { 
+                        previewNoteData = data.copy(state = PreviewState.EXPANDING)
+                    },
+                    onExpansionComplete = {
                         onNavigateToEditor(data.note.id)
-                        // Mark as navigated away so we can trigger return animation on resume
-                        animatingNoteData = data.copy(isNavigatedAway = true)
-                    } else {
-                        animatingNoteData = null
+                        // Prepare return animation data
+                        animatingNoteData = NoteAnimationData(
+                            note = data.note,
+                            initialGeometry = data.geometry,
+                            containerOffset = data.containerOffset,
+                            isNavigatedAway = true
+                        )
+                        previewNoteData = null
                     }
-                }
-            )
+                )
+            }
         }
-
-        // Preview Overlay
-        previewNoteData?.let { data ->
-            NotePreviewOverlay(
-                data = data,
-                onDismiss = { previewNoteData = null },
-                onNoteChange = { note, geometry ->
-                    previewNoteData = previewNoteData?.copy(note = note, geometry = geometry)
-                },
-                onExpand = { 
-                    previewNoteData = data.copy(state = PreviewState.EXPANDING)
-                },
-                onExpansionComplete = {
-                    onNavigateToEditor(data.note.id)
-                    // Prepare return animation data
-                    animatingNoteData = NoteAnimationData(
-                        note = data.note,
-                        initialGeometry = data.geometry,
-                        containerOffset = data.containerOffset,
-                        isNavigatedAway = true
-                    )
-                    previewNoteData = null
-                }
-            )
         }
     }
 
@@ -824,8 +928,11 @@ fun HomeScreen(
         val focusRequester = remember { FocusRequester() }
         
         AlertDialog(
-            onDismissRequest = { showGroupNameDialog = false },
-            title = { Text("Create Group") },
+            onDismissRequest = { 
+                showGroupNameDialog = false 
+                groupingTargetItem = null
+            },
+            title = { Text(if (groupingTargetItem != null) "Create Group" else "Create Group from Selection") },
             text = {
                 OutlinedTextField(
                     value = groupName,
@@ -843,7 +950,16 @@ fun HomeScreen(
                     enabled = groupName.isNotBlank(),
                     onClick = {
                         if (groupName.isNotBlank()) {
-                            viewModel.createGroup(groupName.trim(), selectedIds.toList())
+                            if (groupingTargetItem != null) {
+                                val (dragged, targetId) = groupingTargetItem!!
+                                if (dragged is HomeItem.NoteItem && targetId != null && targetId.startsWith("note_")) {
+                                    val targetNoteId = targetId.removePrefix("note_").toLong()
+                                    viewModel.createGroup(groupName.trim(), listOf(dragged.note.id, targetNoteId))
+                                }
+                                groupingTargetItem = null
+                            } else {
+                                viewModel.createGroup(groupName.trim(), selectedIds.toList())
+                            }
                             viewModel.clearSelection()
                             showGroupNameDialog = false
                         }
@@ -855,6 +971,7 @@ fun HomeScreen(
             dismissButton = {
                 TextButton(onClick = { 
                     showGroupNameDialog = false 
+                    groupingTargetItem = null
                     viewModel.clearSelection()
                 }) {
                     Text("Cancel")
@@ -1086,7 +1203,7 @@ fun NotePopOutOverlay(
                     // Show miniature content initially
                     Box(modifier = Modifier.fillMaxSize().padding(8.dp)) {
                         Text(
-                            text = TitleUtils.getShortTitle(data.note.title, 2),
+                            text = TitleUtils.getShortTitle(data.note, 2),
                             style = MaterialTheme.typography.labelSmall,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
@@ -1276,7 +1393,7 @@ private fun PreviewContent(note: Note, progress: Float, modifier: Modifier = Mod
             .fillMaxWidth()
     ) {
         Text(
-            text = note.title.ifEmpty { "Untitled" },
+            text = NoteDisplayUtils.resolveNoteDisplayData(note).displayTitle,
             style = MaterialTheme.typography.headlineSmall,
             fontSize = titleSize,
             fontWeight = FontWeight.ExtraBold,
@@ -1294,5 +1411,92 @@ private fun PreviewContent(note: Note, progress: Float, modifier: Modifier = Mod
             overflow = TextOverflow.Ellipsis,
             lineHeight = lineSpacing
         )
+    }
+}
+
+@Composable
+private fun HomeEmptyState(isSearching: Boolean, onCreate: () -> Unit) {
+    val transition = rememberInfiniteTransition(label = "empty")
+    val bob by transition.animateFloat(
+        initialValue = -6f,
+        targetValue = 6f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "bob"
+    )
+    val tilt by transition.animateFloat(
+        initialValue = -4f,
+        targetValue = 4f,
+        animationSpec = infiniteRepeatable(tween(2400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "tilt"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 40.dp)
+            .padding(bottom = 80.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .size(150.dp)
+                    .background(
+                        Brush.radialGradient(
+                            listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), Color.Transparent)
+                        ),
+                        CircleShape
+                    )
+            )
+            Box(
+                modifier = Modifier
+                    .graphicsLayer {
+                        translationY = bob * density
+                        rotationZ = tilt
+                    }
+                    .size(92.dp)
+                    .shadow(18.dp, RoundedCornerShape(28.dp), spotColor = MaterialTheme.colorScheme.primary)
+                    .background(BrandGradient, RoundedCornerShape(28.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isSearching) Icons.Default.Search else Icons.Default.EditNote,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(46.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        Text(
+            text = if (isSearching) "Nothing matches that" else "Your canvas is waiting",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = if (isSearching) "Try a different word, or search 'mention ...' or '100 words'."
+                else "Capture a thought, a plan, or a spark of an idea. It all starts with one note.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+
+        if (!isSearching) {
+            Spacer(modifier = Modifier.height(24.dp))
+            Button(
+                onClick = onCreate,
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Write your first note", fontWeight = FontWeight.SemiBold)
+            }
+        }
     }
 }

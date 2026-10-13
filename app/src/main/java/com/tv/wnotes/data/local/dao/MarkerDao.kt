@@ -6,6 +6,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface MarkerDao {
+    @Query("SELECT * FROM text_markers")
+    fun getAllMarkers(): Flow<List<TextMarker>>
+
     @Query("SELECT * FROM text_markers WHERE tabId = :tabId ORDER BY createdAt ASC")
     fun getMarkersForTab(tabId: Long): Flow<List<TextMarker>>
 

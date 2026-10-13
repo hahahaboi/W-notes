@@ -24,3 +24,9 @@ data class WMetadata(
     val authorId: String? = null,
     val extra: Map<String, String> = emptyMap()
 )
+
+@Immutable
+data class WGoal(
+    val blockId: String,
+    val offset: Int
+)

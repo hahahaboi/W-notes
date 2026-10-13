@@ -21,6 +21,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
@@ -32,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.tv.wnotes.data.local.entity.Note
 import com.tv.wnotes.data.local.model.GroupWithNotes
+import com.tv.wnotes.util.NoteDisplayUtils
 import com.tv.wnotes.util.TitleUtils
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -67,11 +69,21 @@ fun GroupCollageCard(
     // Store geometries for hit-testing
     val cardGeometries = remember { mutableStateMapOf<Long, CardGeometry>() }
 
+    val dragCoordinator = LocalWorkspaceDragCoordinator.current
+    val isHovered = dragCoordinator.hoveredTargetId == "group_${groupWithNotes.group.id}"
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .height(180.dp)
             .padding(vertical = 8.dp)
+            .onGloballyPositioned { coords ->
+                dragCoordinator.updateItemBounds("group_${groupWithNotes.group.id}", coords.boundsInWindow())
+            }
+            .then(
+                if (isHovered) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(22.dp))
+                else Modifier
+            )
     ) {
         Column(
             modifier = Modifier.fillMaxSize()
@@ -106,7 +118,7 @@ fun GroupCollageCard(
                     Icon(
                         imageVector = Icons.Default.Star,
                         contentDescription = "Starred",
-                        tint = Color(0xFFFFB300),
+                        tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(14.dp)
                     )
                 }
@@ -358,6 +370,10 @@ fun GroupedMiniCard(
     note: Note,
     geometry: CardGeometry
 ) {
+    val hasRealTitle = !note.title.isBlank() && 
+        !note.title.equals("Untitled", ignoreCase = true) && 
+        !note.title.equals("New Note", ignoreCase = true)
+
     Surface(
         modifier = Modifier
             .offset(x = geometry.xOffset, y = geometry.yOffset)
@@ -384,22 +400,37 @@ fun GroupedMiniCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.Top
                 ) {
-                    Text(
-                        text = TitleUtils.getShortTitle(note.title, wordCount = 2),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        lineHeight = 12.sp,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f)
-                    )
+                    if (hasRealTitle) {
+                        Text(
+                            text = TitleUtils.getShortTitle(note.title, 2),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 2,
+                            lineHeight = 12.sp,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else {
+                        val displayData = NoteDisplayUtils.resolveNoteDisplayData(note)
+                        Text(
+                            text = displayData.displayContent,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            maxLines = 4,
+                            lineHeight = 11.sp,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                     if (note.isStarred) {
+                        Spacer(modifier = Modifier.width(2.dp))
                         Icon(
                             imageVector = Icons.Default.Star,
                             contentDescription = null,
-                            tint = Color(0xFFFFB300),
+                            tint = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.size(10.dp)
                         )
                     }

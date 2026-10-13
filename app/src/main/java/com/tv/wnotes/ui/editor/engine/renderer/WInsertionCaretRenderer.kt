@@ -36,7 +36,7 @@ fun WInsertionCaretRenderer(
     val beamColor = if (caretState.isValidTarget) {
         MaterialTheme.colorScheme.primary
     } else {
-        Color.Red.copy(alpha = 0.5f) // Visual warning for invalid drop target
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f) // Visual warning for invalid drop target
     }
 
     val alpha by animateFloatAsState(

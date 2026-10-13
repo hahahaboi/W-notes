@@ -14,7 +14,12 @@ import kotlinx.coroutines.launch
 
 class RoughNoteViewModel(application: Application) : AndroidViewModel(application) {
     private val database = WNotesDatabase.getDatabase(application)
-    private val repository = NoteRepository(database.noteDao(), database.noteTabDao(), database.annotationDao(), database.markerDao())
+    private val repository = NoteRepository(
+        database.noteDao(),
+        database.noteTabDao(),
+        database.annotationDao(),
+        database.markerDao()
+    )
     private val prefManager = PreferenceManager(application)
 
     val floatingX = prefManager.floatingButtonX

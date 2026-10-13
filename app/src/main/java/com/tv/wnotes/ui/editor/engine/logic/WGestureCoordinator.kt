@@ -63,6 +63,15 @@ class WGestureCoordinator(
         val hit = layoutProvider.hitTest(offset)
         lastHitResult = hit
 
+        // Double-tap empty space to cancel selection
+        if (tapCount == 2 && layoutProvider.currentSelection?.isActive == true) {
+            val isEmptySpace = hit == null || hit.isBelowDocument || !hit.isOnText
+            if (isEmptySpace) {
+                onCommand(WEditorCommand.ClearSelection)
+                return
+            }
+        }
+
         if (hit == null) {
             onCommand(WEditorCommand.ClearSelection)
             return

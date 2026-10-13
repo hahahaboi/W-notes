@@ -16,6 +16,7 @@ class PreferenceManager(private val context: Context) {
         val IS_COLLAPSED = booleanPreferencesKey("is_collapsed")
         val DOCKED_EDGE = stringPreferencesKey("docked_edge")
         val LOCKED_PIN = stringPreferencesKey("locked_pin")
+        val DARK_MODE = booleanPreferencesKey("dark_mode")
     }
 
     val floatingButtonX: Flow<Float?> = context.dataStore.data.map { it[FLOATING_BUTTON_X] }
@@ -23,6 +24,8 @@ class PreferenceManager(private val context: Context) {
     val isCollapsed: Flow<Boolean> = context.dataStore.data.map { it[IS_COLLAPSED] ?: false }
     val dockedEdge: Flow<String?> = context.dataStore.data.map { it[DOCKED_EDGE] }
     val lockedPin: Flow<String?> = context.dataStore.data.map { it[LOCKED_PIN] }
+    /** null until the user picks a mode in Settings; callers fall back to the system setting. */
+    val darkMode: Flow<Boolean?> = context.dataStore.data.map { it[DARK_MODE] }
 
     fun sectionSort(sectionKey: String): Flow<String> {
         val key = stringPreferencesKey("section_sort_$sectionKey")
@@ -53,6 +56,12 @@ class PreferenceManager(private val context: Context) {
     suspend fun saveLockedPin(pin: String) {
         context.dataStore.edit {
             it[LOCKED_PIN] = pin
+        }
+    }
+
+    suspend fun saveDarkMode(enabled: Boolean) {
+        context.dataStore.edit {
+            it[DARK_MODE] = enabled
         }
     }
 }

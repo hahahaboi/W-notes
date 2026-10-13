@@ -15,5 +15,6 @@ data class WTextSpan(
 
 enum class SpanType {
     Bold, Italic, Underline, Strikethrough, 
-    Link, Highlight, Code, Comment, Backlink
+    Link, Highlight, Code, Comment, Backlink,
+    FontSize, FontFamily
 }

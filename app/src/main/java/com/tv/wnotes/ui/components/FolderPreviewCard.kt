@@ -1,6 +1,5 @@
 package com.tv.wnotes.ui.components
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -10,19 +9,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.tv.wnotes.data.local.entity.Folder
 import com.tv.wnotes.ui.home.HomeItem
+import com.tv.wnotes.util.NoteDisplayUtils
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -49,20 +47,20 @@ fun FolderPreviewCard(
         Column(
             modifier = Modifier
                 .padding(16.dp)
-                .padding(top = 12.dp) // Space for tab
+                .padding(top = 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top // Align counts with the top of the title
+                verticalAlignment = Alignment.Top
             ) {
                 Text(
                     text = folder.name,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.ExtraBold, // Increased weight for "strongest text"
+                    fontWeight = FontWeight.ExtraBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(end = 8.dp), // Added padding for truncation clearance
+                    modifier = Modifier.weight(1f).padding(end = 8.dp),
                     color = Color.DarkGray
                 )
                 
@@ -91,11 +89,16 @@ fun FolderPreviewCard(
             } else {
                 items.take(2).forEach { item ->
                     val (title, content) = when (item) {
-                        is HomeItem.NoteItem -> item.note.title to item.note.content
-                        is HomeItem.GroupItem -> ("[Group] " + item.groupWithNotes.group.name) to (item.groupWithNotes.notes.firstOrNull()?.content ?: "")
+                        is HomeItem.NoteItem -> {
+                            val data = NoteDisplayUtils.resolveNoteDisplayData(item.note)
+                            data.displayTitle to data.displayContent
+                        }
+                        is HomeItem.GroupItem -> {
+                            ("[Group] " + item.groupWithNotes.group.name) to (item.groupWithNotes.notes.firstOrNull()?.content ?: "")
+                        }
                     }
                     Text(
-                        text = title.ifEmpty { "Untitled" },
+                        text = title,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -103,7 +106,7 @@ fun FolderPreviewCard(
                         color = Color.DarkGray
                     )
                     Text(
-                        text = content.ifBlank { "No preview available" },
+                        text = content,
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray,
                         maxLines = 2,

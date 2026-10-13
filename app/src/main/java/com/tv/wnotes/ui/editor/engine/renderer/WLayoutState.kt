@@ -10,7 +10,17 @@ import com.tv.wnotes.ui.editor.engine.logic.WHitTestEngine
 import com.tv.wnotes.ui.editor.engine.logic.WLayoutProvider
 import com.tv.wnotes.ui.editor.engine.model.WBlock
 import com.tv.wnotes.ui.editor.engine.state.WSelectionPoint
+import com.tv.wnotes.ui.editor.engine.state.WSelectionRange
 import com.tv.wnotes.ui.editor.engine.state.WSelectionState
+import androidx.compose.ui.layout.LayoutCoordinates
+
+/**
+ * Stable wrapper for coordinates to prevent unnecessary recompositions.
+ */
+@Stable
+class WEditorRootCoordinates(initial: LayoutCoordinates? = null) {
+    var value: LayoutCoordinates? by mutableStateOf(initial)
+}
 
 /**
  * Implementation of WLayoutProvider that holds active layout information
@@ -22,10 +32,14 @@ class WLayoutState : WLayoutProvider {
     val blockHeights = mutableStateMapOf<String, Float>()
     
     override var density: Float = 1f
+    override var zoom: Float = 1.0f
     override var currentSelection by mutableStateOf<WSelectionState?>(null)
     override var currentBlocks by mutableStateOf<List<WBlock>>(emptyList())
     override var currentAnnotations by mutableStateOf<List<com.tv.wnotes.data.local.entity.ContextAnnotation>>(emptyList())
     
+    var titleLayoutResult by mutableStateOf<TextLayoutResult?>(null)
+    var titleOffset by mutableStateOf(Offset.Zero)
+
     // Internal index to avoid O(N) filtering in hit-tests
     private var annotationIndex = emptyMap<String, List<com.tv.wnotes.data.local.entity.ContextAnnotation>>()
 
@@ -59,9 +73,16 @@ class WLayoutState : WLayoutProvider {
     }
 
     override fun getInsertionBeamForPoint(point: WSelectionPoint): Rect? {
+        if (point.blockId == "W_NOTE_TITLE") {
+            val layout = titleLayoutResult ?: return null
+            val validOffset = layout.validOffsetOrNull(point.offset) ?: return null
+            val rect = layout.getCursorRect(validOffset)
+            return rect.translate(titleOffset)
+        }
         val layout = layoutResults[point.blockId] ?: return null
         val offset = blockOffsets[point.blockId] ?: Offset.Zero
-        val rect = layout.getCursorRect(point.offset)
+        val validOffset = layout.validOffsetOrNull(point.offset) ?: return null
+        val rect = layout.getCursorRect(validOffset)
         return rect.translate(offset)
     }
 
@@ -71,26 +92,52 @@ class WLayoutState : WLayoutProvider {
         
         val allRects = mutableListOf<Rect>()
         selection.ranges.forEach { range ->
-            val normalized = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(range, currentBlocks)
-            
-            currentBlocks.forEach { block ->
-                val layout = layoutResults[block.id] ?: return@forEach
+            allRects.addAll(getSelectionBoundsForRange(range))
+        }
+        return allRects
+    }
+
+    override fun getSelectionBoundsForRange(range: WSelectionRange): List<Rect> {
+        val allRects = mutableListOf<Rect>()
+        val normalized = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(range, currentBlocks)
+        
+        // Handle Title Selection
+        if (normalized.anchor.blockId == "W_NOTE_TITLE") {
+            titleLayoutResult?.let { layout ->
+                val textLength = layout.layoutInput.text.length
+                val start = normalized.anchor.offset.coerceIn(0, textLength)
+                val end = if (normalized.focus.blockId == "W_NOTE_TITLE") {
+                    normalized.focus.offset.coerceIn(0, textLength)
+                } else {
+                    textLength
+                }.coerceIn(0, textLength)
+                
+                if (start < end) {
+                    layout.selectionPathOrNull(start, end)?.let { path ->
+                        allRects.add(path.getBounds().translate(titleOffset))
+                    }
+                }
+            }
+            if (normalized.focus.blockId == "W_NOTE_TITLE") return allRects
+        }
+
+        val startBlockIdx = currentBlocks.indexOfFirst { it.id == normalized.anchor.blockId }
+        val endBlockIdx = currentBlocks.indexOfFirst { it.id == normalized.focus.blockId }
+        
+        // Stale ranges are ignored to prevent invalid coordinate mapping
+        if (startBlockIdx < 0 || endBlockIdx < 0) return allRects
+
+        currentBlocks.forEachIndexed { currentIdx, block ->
+            if (currentIdx in startBlockIdx..endBlockIdx) {
+                val layout = layoutResults[block.id] ?: return@forEachIndexed
                 val offset = blockOffsets[block.id] ?: Offset.Zero
                 
-                val startIdx = currentBlocks.indexOfFirst { it.id == normalized.anchor.blockId }
-                val endIdx = currentBlocks.indexOfFirst { it.id == normalized.focus.blockId }
-                val currentIdx = currentBlocks.indexOfFirst { it.id == block.id }
+                val textLength = layout.layoutInput.text.length
+                val selectionStart = if (currentIdx == startBlockIdx) normalized.anchor.offset.coerceIn(0, textLength) else 0
+                val selectionEnd = if (currentIdx == endBlockIdx) normalized.focus.offset.coerceIn(0, textLength) else textLength
 
-                if (currentIdx in startIdx..endIdx) {
-                    val selectionStart = if (currentIdx == startIdx) normalized.anchor.offset else 0
-                    val selectionEnd = if (currentIdx == endIdx) normalized.focus.offset else {
-                        if (block is com.tv.wnotes.ui.editor.engine.model.WTextBlock) block.text.length 
-                        else if (block is com.tv.wnotes.ui.editor.engine.model.WChecklistBlock) block.text.length
-                        else 0
-                    }
-
-                    if (selectionStart < selectionEnd) {
-                        val path = layout.getPathForRange(selectionStart, selectionEnd)
+                if (selectionStart < selectionEnd) {
+                    layout.selectionPathOrNull(selectionStart, selectionEnd)?.let { path ->
                         allRects.add(path.getBounds().translate(offset))
                     }
                 }
@@ -105,6 +152,12 @@ class WLayoutState : WLayoutProvider {
 
     override fun getAnnotationGeometry(annotationId: String): com.tv.wnotes.ui.editor.engine.logic.AnnotationGeometry? {
         val annotation = currentAnnotations.find { it.id == annotationId } ?: return null
+        
+        if (annotation.blockId == "W_NOTE_TITLE") {
+            val layout = titleLayoutResult ?: return null
+            return WAnnotationGeometryCalculator.calculateGeometry(annotation, layout, titleOffset)
+        }
+
         val layout = layoutResults[annotation.blockId] ?: return null
         val offset = blockOffsets[annotation.blockId] ?: Offset.Zero
         
@@ -112,13 +165,20 @@ class WLayoutState : WLayoutProvider {
     }
 
     override fun hitTest(offset: Offset): WHitResult? {
-        val layouts = blockOffsets.mapNotNull { (id, blockOffset) ->
-            val layout = layoutResults[id] ?: return@mapNotNull null
+        val layouts = mutableListOf<WBlockLayoutInfo>()
+        
+        titleLayoutResult?.let { layout ->
+            layouts.add(WBlockLayoutInfo("W_NOTE_TITLE", layout, titleOffset, layout.size.height.toFloat()))
+        }
+
+        blockOffsets.forEach { (id, blockOffset) ->
+            val layout = layoutResults[id] ?: return@forEach
             val height = blockHeights[id] ?: 0f
-            val block = currentBlocks.find { it.id == id }
-            val indentation = (block?.style?.indentationLevel ?: 0) * 16f * density
-            WBlockLayoutInfo(id, layout, blockOffset, height, indentation)
-        }.sortedBy { it.relativeOffset.y }
+            // blockOffsets are measured on the text itself, so indentation is already included.
+            layouts.add(WBlockLayoutInfo(id, layout, blockOffset, height))
+        }
+        
+        layouts.sortBy { it.relativeOffset.y }
 
         return WHitTestEngine.hitTest(offset, layouts)
     }
@@ -138,7 +198,8 @@ class WLayoutState : WLayoutProvider {
     fun getNextPosition(current: WSelectionPoint, direction: com.tv.wnotes.ui.editor.engine.logic.NavigationDirection): WSelectionPoint {
         val layout = layoutResults[current.blockId] ?: return current
         val offset = blockOffsets[current.blockId] ?: Offset.Zero
-        val cursorRect = layout.getCursorRect(current.offset).translate(offset)
+        val validOffset = layout.validOffsetOrNull(current.offset) ?: return current
+        val cursorRect = layout.getCursorRect(validOffset).translate(offset)
         
         return when (direction) {
             com.tv.wnotes.ui.editor.engine.logic.NavigationDirection.UP -> {

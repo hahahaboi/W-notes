@@ -13,6 +13,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tv.wnotes.ui.editor.engine.renderer.WLayoutState
+import com.tv.wnotes.ui.editor.engine.renderer.selectionPathOrNull
 import com.tv.wnotes.ui.editor.engine.state.WDragPhase
 import com.tv.wnotes.ui.editor.engine.logic.WEditorCommand
 import com.tv.wnotes.ui.editor.engine.renderer.WDragAnimationController
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Root composable of the next-generation editor.
@@ -39,7 +41,7 @@ fun WEditor(
 ) {
     val snapshot by host.snapshot
     val layoutState = remember { WLayoutState() }
-    val scrollState = androidx.compose.foundation.rememberScrollState()
+    val scrollState = host.verticalScrollState
     val scope = rememberCoroutineScope()
     val animController = remember { WDragAnimationController(scope) }
     val focusRequester = remember { FocusRequester() }
@@ -86,7 +88,7 @@ fun WEditor(
     // Sync animation controller with drag phase changes
     LaunchedEffect(drag.phase) {
         val internalState = when(drag.phase) {
-            WDragPhase.IDLE -> WDragInternalState.Idle
+            WDragPhase.IDLE, WDragPhase.COPY_ARMED -> WDragInternalState.Idle
             WDragPhase.PREPARING_LIFT -> WDragInternalState.PreparingLift
             WDragPhase.LIFTING -> WDragInternalState.Lifting
             WDragPhase.DRAGGING -> WDragInternalState.Dragging
@@ -108,7 +110,7 @@ fun WEditor(
 
     // Update drag position in anim controller
     LaunchedEffect(drag.fingerPosition) {
-        if (drag.fingerPosition != androidx.compose.ui.geometry.Offset.Unspecified) {
+        if (drag.fingerPosition != Offset.Unspecified) {
             animController.updateDragPosition(drag.fingerPosition)
         }
     }
@@ -134,18 +136,18 @@ fun WEditor(
 
     // Dismiss annotation popup on scroll
     LaunchedEffect(scrollState.isScrollInProgress) {
-        if (scrollState.isScrollInProgress && snapshot.activeAnnotationId != null) {
+        if (scrollState.isScrollInProgress && (snapshot.activeAnnotationId != null)) {
             host.dispatchCommand(WEditorCommand.DismissAnnotation)
         }
     }
 
     // Cursor blinking logic (Local state for better performance and reliability)
-    var cursorBlinkVisible by remember { mutableStateOf(true) }
+    var cursorBlinkVisible by remember { mutableStateOf(value = true) }
     LaunchedEffect(cursor.position, cursor.isVisible, snapshot.document.revision) {
         if (cursor.isVisible) {
             cursorBlinkVisible = true
             while (true) {
-                kotlinx.coroutines.delay(500)
+                kotlinx.coroutines.delay(500.milliseconds)
                 cursorBlinkVisible = !cursorBlinkVisible
             }
         } else {
@@ -166,29 +168,40 @@ fun WEditor(
         val margin = with(density) { 60.dp.toPx() }
         val currentScroll = scrollState.value.toFloat()
 
-        // Calculate the bounding box of the highlighted range
         val blocks = snapshot.document.blocks
-        val startBlockIdx = blocks.indexOfFirst { it.id == range.anchor.blockId }
-        val endBlockIdx = blocks.indexOfFirst { it.id == range.focus.blockId }
-        
-        if (startBlockIdx == -1 || endBlockIdx == -1) return@LaunchedEffect
-        
         var minTop = Float.MAX_VALUE
         var maxBottom = Float.MIN_VALUE
-        
-        for (i in startBlockIdx..endBlockIdx) {
-            val blockId = blocks[i].id
-            val blockOffset = layoutState.blockOffsets[blockId] ?: continue
-            val layout = layoutState.layoutResults[blockId] ?: continue
+
+        if (range.anchor.blockId == "W_NOTE_TITLE") {
+            val layout = layoutState.titleLayoutResult
+            if (layout != null) {
+                val start = range.anchor.offset
+                val end = range.focus.offset
+                layout.selectionPathOrNull(start, end)?.let { path ->
+                    val bounds = path.getBounds()
+                    minTop = bounds.top + layoutState.titleOffset.y
+                    maxBottom = bounds.bottom + layoutState.titleOffset.y
+                }
+            }
+        } else {
+            val startBlockIdx = blocks.indexOfFirst { it.id == range.anchor.blockId }
+            val endBlockIdx = blocks.indexOfFirst { it.id == range.focus.blockId }
             
-            val start = if (i == startBlockIdx) range.anchor.offset else 0
-            val end = if (i == endBlockIdx) range.focus.offset else layout.layoutInput.text.length
-            
-            if (start < end) {
-                val path = layout.getPathForRange(start, end)
-                val bounds = path.getBounds()
-                minTop = minOf(minTop, bounds.top + blockOffset.y)
-                maxBottom = maxOf(maxBottom, bounds.bottom + blockOffset.y)
+            if (startBlockIdx != -1 && endBlockIdx != -1) {
+                for (i in startBlockIdx..endBlockIdx) {
+                    val blockId = blocks[i].id
+                    val blockOffset = layoutState.blockOffsets[blockId] ?: continue
+                    val layout = layoutState.layoutResults[blockId] ?: continue
+                    
+                    val start = if (i == startBlockIdx) range.anchor.offset else 0
+                    val end = if (i == endBlockIdx) range.focus.offset else layout.layoutInput.text.length
+                    
+                    layout.selectionPathOrNull(start, end)?.let { path ->
+                        val bounds = path.getBounds()
+                        minTop = minOf(minTop, bounds.top + blockOffset.y)
+                        maxBottom = maxOf(maxBottom, bounds.bottom + blockOffset.y)
+                    }
+                }
             }
         }
         
@@ -229,9 +242,8 @@ fun WEditor(
                     // Moved inside the if-block to ensure it is only placed when parent coordinates are ready.
                     WEditorInputLayer(
                         host = host,
-                        focusRequester = focusRequester,
-                        onPlaced = { isInputLayerPlaced = true }
-                    )
+                        focusRequester = focusRequester
+                    ) { isInputLayerPlaced = true }
 
                     // 1. Content Surface
                     WEditorSurface(
@@ -273,7 +285,7 @@ fun WEditor(
                             .size(32.dp)
                             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
                             .semantics { 
-                                contentDescription = if (snapshot.isMarkerSidebarOpen) "Close text markers" else "Open text markers"
+                                contentDescription = if (snapshot.isMarkerSidebarOpen) "Close marker sidebar" else "Open marker sidebar"
                             }
                     ) {
                         Icon(
@@ -286,7 +298,6 @@ fun WEditor(
                 }
             }
 
-            // 4. Marker Sidebar Layer
             androidx.compose.animation.AnimatedVisibility(
                 visible = snapshot.isMarkerSidebarOpen,
                 enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
@@ -294,7 +305,8 @@ fun WEditor(
             ) {
                 WMarkerSidebar(
                     snapshot = snapshot,
-                    onCommand = { host.dispatchCommand(it) }
+                    onCommand = { host.dispatchCommand(it) },
+                    modifier = Modifier.fillMaxHeight()
                 )
             }
 
@@ -322,14 +334,14 @@ fun WEditor(
                 DebugRow("Current Stage", tel.currentStage.toString())
                 DebugRow("Pointer Pos", "${tel.pointerPosition.x.toInt()}, ${tel.pointerPosition.y.toInt()}")
                 DebugRow("Drag Phase", tel.dragPhase.toString())
-                
+
                 Spacer(Modifier.height(4.dp))
                 Text("HIT TEST", color = Color.Cyan, fontSize = 9.sp)
                 DebugRow("Result", tel.hitTestResult)
                 DebugRow("Hover Block", tel.hoverBlock.take(8))
                 DebugRow("Hover Line", tel.hoverLine.toString())
                 DebugRow("Hover Offset", tel.hoverOffset.toString())
-                
+
                 Spacer(Modifier.height(4.dp))
                 Text("DROP CARET", color = Color.Green, fontSize = 9.sp)
                 DebugRow("Visible", tel.dropCaretVisible.toString())
@@ -337,12 +349,12 @@ fun WEditor(
                 DebugRow("Valid Target", tel.dropValid.toString())
                 DebugRow("Virtual Lines", tel.virtualLineCount.toString())
                 DebugRow("Is Virtual", tel.isVirtual.toString())
-                
+
                 Spacer(Modifier.height(4.dp))
                 Text("LIFECYCLE", color = Color.Magenta, fontSize = 9.sp)
                 DebugRow("Move Pending", tel.moveRangePending.toString())
                 DebugRow("Move Success", tel.moveRangeSuccess.toString())
-                
+
                 if (tel.failureReason != null) {
                     Spacer(Modifier.height(4.dp))
                     Text("FAILURE: ${tel.failureReason}", color = Color.Red, fontSize = 9.sp)

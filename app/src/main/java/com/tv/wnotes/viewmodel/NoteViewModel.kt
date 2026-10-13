@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 
 enum class UncategorizedFilter(val label: String) {
     ALL("All"),
+    INCOMPLETE("Incomplete"),
     UNPINNED("Unpinned"),
     UNFOLDERED("No Folder"),
     UNSTAPLED("Not Stapled"),
@@ -77,11 +78,12 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         val stapledNoteIds = pathInfo.map { it.noteId }.toSet()
         
         val noteItems = allNotes.filter { note ->
-            if (note.id in groupedIdsSet) return@filter false
+            if (filter != UncategorizedFilter.INCOMPLETE && note.id in groupedIdsSet) return@filter false
             when (filter) {
                 UncategorizedFilter.ALL -> {
                     note.folderId == null && !note.isPinned && !note.isStarred && !stapledNoteIds.contains(note.id)
                 }
+                UncategorizedFilter.INCOMPLETE -> isNoteIncomplete(note)
                 UncategorizedFilter.UNPINNED -> !note.isPinned
                 UncategorizedFilter.UNFOLDERED -> note.folderId == null
                 UncategorizedFilter.UNSTAPLED -> !stapledNoteIds.contains(note.id)
@@ -95,15 +97,27 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                 UncategorizedFilter.ALL -> {
                     group.folderId == null && !group.isPinned && !group.isStarred
                 }
+                UncategorizedFilter.INCOMPLETE -> groupWithNotes.notes.any { isNoteIncomplete(it) }
                 UncategorizedFilter.UNPINNED -> !group.isPinned
                 UncategorizedFilter.UNFOLDERED -> group.folderId == null
-                UncategorizedFilter.UNSTAPLED -> true // Group staples not fully tracked in info yet?
+                UncategorizedFilter.UNSTAPLED -> true
                 UncategorizedFilter.UNSTARRED -> !group.isStarred
             }
         }.map { HomeItem.GroupItem(it) }
 
         (noteItems + groupItems).sortedByDescending { it.timestamp }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    fun isNoteIncomplete(note: Note): Boolean {
+        if (!note.hasGoal || note.goalBlockId == null) return false
+        return note.content.length < note.goalTargetLength
+    }
+
+    fun updateNoteGoal(noteId: Long, hasGoal: Boolean, goalBlockId: String?, goalOffset: Int, goalTargetLength: Int) {
+        viewModelScope.launch {
+            repository.updateGoal(noteId, hasGoal, goalBlockId, goalOffset, goalTargetLength)
+        }
+    }
 
     val allNotes: StateFlow<List<Note>> = repository.allNotes
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -267,6 +281,10 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         return database.noteDao().getNoteById(id)
     }
 
+    suspend fun getTabById(id: Long): NoteTab? {
+        return repository.getTabById(id)
+    }
+
     suspend fun getNotesByIds(ids: List<Long>): List<Note> {
         return repository.getByIds(ids)
     }
@@ -275,7 +293,7 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val note = Note(
                 title = title.ifEmpty { 
-                    if (content.isNotEmpty()) content.take(40) else "Untitled" 
+                    if (content.isNotEmpty()) content.take(40) else "" 
                 }, 
                 content = content, 
                 folderId = folderId
@@ -287,7 +305,7 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun createNoteAndReturnId(title: String, content: String, folderId: Long? = null): Long {
         val note = Note(
             title = title.ifEmpty {
-                if (content.isNotEmpty()) content.take(40) else "Untitled"
+                if (content.isNotEmpty()) content.take(40) else ""
             },
             content = content,
             folderId = folderId
@@ -547,12 +565,76 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     fun getGroupWithNotesById(groupId: Long) = noteGroupRepository.getGroupWithNotesById(groupId)
 
+    suspend fun addNoteToGroupSync(noteId: Long, groupId: Long) {
+        val note = repository.getNoteById(noteId) ?: return
+        
+        // 1. Get current members to determine next order index
+        val groupWithNotes = noteGroupRepository.getGroupWithNotesById(groupId).firstOrNull() ?: return
+        val nextIndex = groupWithNotes.notes.size
+        
+        // 2. Add member
+        val member = com.tv.wnotes.data.local.entity.NoteGroupMember(
+            groupId = groupId,
+            noteId = noteId,
+            orderIndex = nextIndex
+        )
+        database.noteGroupDao().insertMembers(listOf(member))
+        
+        // 3. Update note's folder to match group's folder (optional but consistent)
+        if (note.folderId != groupWithNotes.group.folderId) {
+            repository.updateTitleAndFolder(noteId, note.title, groupWithNotes.group.folderId)
+        }
+    }
+
+    fun reorderItem(itemId: String, targetId: String) {
+        viewModelScope.launch {
+            val items = homeItems.value
+            val itemIndex = items.indexOfFirst { it.id == itemId }
+            val targetIndex = items.indexOfFirst { it.id == targetId }
+            
+            if (itemIndex == -1 || targetIndex == -1 || itemIndex == targetIndex) return@launch
+            
+            // Simplified persistence: Set the moved item's timestamp to be 
+            // slightly more/less than the target item's timestamp to push it 
+            // just above/below in the DESC sorted list.
+            val targetItem = items[targetIndex]
+            val newTimestamp = if (itemIndex > targetIndex) {
+                // Moving UP in the list: make it slightly NEWER than target
+                targetItem.timestamp + 1
+            } else {
+                // Moving DOWN: make it slightly OLDER than target
+                targetItem.timestamp - 1
+            }
+            
+            updateItemTimestamp(itemId, newTimestamp)
+        }
+    }
+
+    private suspend fun updateItemTimestamp(itemId: String, timestamp: Long) {
+        if (itemId.startsWith("note_")) {
+            val id = itemId.removePrefix("note_").toLong()
+            val note = repository.getNoteById(id) ?: return
+            repository.update(note.copy(updatedAt = timestamp))
+        } else if (itemId.startsWith("group_")) {
+            val id = itemId.removePrefix("group_").toLong()
+            val groupFlow = noteGroupRepository.getGroupWithNotesById(id)
+            val group = groupFlow.firstOrNull()?.group ?: return
+            noteGroupRepository.updateGroup(group.copy(createdAt = timestamp, updatedAt = timestamp))
+        }
+    }
+
     // --- Tab Management ---
+
+    companion object {
+        const val MAX_TABS_PER_NOTE = 10
+    }
     
     fun getTabsForNote(noteId: Long): Flow<List<NoteTab>> = repository.getTabsForNote(noteId)
 
-    suspend fun addTabAndReturnId(noteId: Long, title: String? = null, content: String = "", afterTabIndex: Int? = null): Long {
+    suspend fun addTabAndReturnId(noteId: Long, title: String? = "New Tab", content: String = "", afterTabIndex: Int? = null): Long {
         val tabs = repository.getTabsForNoteSync(noteId)
+        if (tabs.size >= MAX_TABS_PER_NOTE) return -1L
+
         val insertIndex = if (afterTabIndex != null) (afterTabIndex + 1).coerceAtMost(tabs.size) else tabs.size
         
         // Shift existing tabs if necessary
@@ -573,9 +655,26 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         return newId
     }
 
-    fun addTab(noteId: Long, title: String? = null, content: String = "") {
+    fun addTab(noteId: Long, title: String? = "New Tab", content: String = "") {
         viewModelScope.launch {
             addTabAndReturnId(noteId, title, content)
+        }
+    }
+
+    fun updateTabTitle(tabId: Long, title: String) {
+        viewModelScope.launch {
+            val tab = repository.getTabById(tabId) ?: return@launch
+            repository.updateTab(tab.copy(title = title, updatedAt = System.currentTimeMillis()))
+            
+            val tabs = repository.getTabsForNoteSync(tab.noteId)
+            if (tabs.firstOrNull()?.id == tab.id) {
+                val note = repository.getNoteById(tab.noteId)
+                if (note != null && note.title != title) {
+                    repository.updateTitleAndFolder(tab.noteId, title, note.folderId)
+                }
+            }
+
+            rebuildNoteSummary(tab.noteId)
         }
     }
 
@@ -593,10 +692,163 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteTab(tab: NoteTab) {
         viewModelScope.launch {
+            val tabs = repository.getTabsForNoteSync(tab.noteId)
+            if (tabs.size <= 1) return@launch // Don't delete the last tab
+
             repository.deleteTab(tab)
+            
+            // Re-index
+            val remaining = repository.getTabsForNoteSync(tab.noteId)
+            remaining.forEachIndexed { index, noteTab ->
+                if (noteTab.orderIndex != index) {
+                    repository.updateTab(noteTab.copy(orderIndex = index))
+                }
+            }
+            
             rebuildNoteSummary(tab.noteId)
         }
     }
+
+    fun deleteTabs(noteId: Long, tabIds: List<Long>) {
+        viewModelScope.launch {
+            val tabs = repository.getTabsForNoteSync(noteId)
+            val toDelete = tabs.filter { it.id in tabIds }
+            
+            if (toDelete.size >= tabs.size) {
+                // If trying to delete all, keep the first one or create a new one?
+                // Requirements say: "If the user deletes every tab, preserve/create the normal empty/default tab"
+                // Let's keep the first tab and just clear its content if it was selected.
+                // Or better: delete all except the first one in the list.
+                val remainingTab = tabs.first()
+                val others = tabs.drop(1)
+                others.forEach { repository.deleteTab(it) }
+                if (remainingTab.id in tabIds) {
+                    repository.updateTab(remainingTab.copy(content = "", title = "New Tab", updatedAt = System.currentTimeMillis()))
+                }
+            } else {
+                toDelete.forEach { repository.deleteTab(it) }
+            }
+
+            // Re-index
+            val remaining = repository.getTabsForNoteSync(noteId)
+            remaining.forEachIndexed { index, noteTab ->
+                repository.updateTab(noteTab.copy(orderIndex = index))
+            }
+            rebuildNoteSummary(noteId)
+        }
+    }
+
+    fun mergeTabs(noteId: Long, tabIds: List<Long>, onComplete: (Long) -> Unit = {}) {
+        viewModelScope.launch {
+            val allTabs = repository.getTabsForNoteSync(noteId)
+            val selectedTabs = allTabs.filter { it.id in tabIds }.sortedBy { it.orderIndex }
+            
+            if (selectedTabs.size < 2) return@launch
+
+            val destinationTab = selectedTabs.first()
+            val sourceTabs = selectedTabs.drop(1)
+
+            val mergedContent = StringBuilder(destinationTab.content)
+            sourceTabs.forEach { source ->
+                if (mergedContent.isNotEmpty()) {
+                    mergedContent.append("\n\n")
+                }
+                mergedContent.append(source.content)
+            }
+
+            // 1. Update destination
+            repository.updateTab(destinationTab.copy(
+                content = mergedContent.toString(),
+                updatedAt = System.currentTimeMillis()
+            ))
+
+            // 2. Delete sources
+            sourceTabs.forEach { repository.deleteTab(it) }
+
+            // 3. Re-index
+            val remaining = repository.getTabsForNoteSync(noteId)
+            remaining.forEachIndexed { index, noteTab ->
+                repository.updateTab(noteTab.copy(orderIndex = index))
+            }
+
+            rebuildNoteSummary(noteId)
+            onComplete(destinationTab.id)
+        }
+    }
+
+    fun moveTabToTrash(tabId: Long) {
+        viewModelScope.launch {
+            val tab = repository.getTabById(tabId) ?: return@launch
+            val noteId = tab.noteId
+            
+            val tabs = repository.getTabsForNoteSync(noteId)
+            if (tabs.size <= 1) return@launch // Don't delete the last tab
+
+            // 1. Create a new note from the tab content
+            val newNoteId = repository.insert(Note(
+                title = tab.title ?: "Deleted Tab",
+                content = tab.content,
+                isDeleted = true,
+                deletedAt = System.currentTimeMillis()
+            ))
+            
+            // 2. Create a tab for that new note
+            repository.insertTab(NoteTab(
+                noteId = newNoteId,
+                title = tab.title,
+                content = tab.content,
+                orderIndex = 0
+            ))
+            
+            // 3. Delete the original tab
+            repository.deleteTab(tab)
+            
+            // 4. Update order indices of remaining tabs
+            repository.getTabsForNoteSync(noteId).forEachIndexed { index, remainingTab ->
+                repository.updateTab(remainingTab.copy(orderIndex = index))
+            }
+            
+            rebuildNoteSummary(noteId)
+        }
+    }
+
+    fun mergeAllTabs(noteId: Long) {
+        viewModelScope.launch {
+            val tabs = repository.getTabsForNoteSync(noteId)
+            if (tabs.size <= 1) return@launch
+            
+            val mergedContent = tabs.joinToString("\n\n---\n\n") { tab ->
+                val titlePrefix = if (tab.title.isNullOrBlank()) "" else "${tab.title}\n"
+                titlePrefix + tab.content
+            }
+            
+            // Keep the first tab, update its content, and delete the rest
+            val firstTab = tabs.first()
+            repository.updateTab(firstTab.copy(
+                content = mergedContent,
+                updatedAt = System.currentTimeMillis()
+            ))
+            
+            tabs.drop(1).forEach { repository.deleteTab(it) }
+            
+            rebuildNoteSummary(noteId)
+        }
+    }
+
+    fun addAllTabsToNew(noteId: Long) {
+        viewModelScope.launch {
+            val tabs = repository.getTabsForNoteSync(noteId)
+            if (tabs.isEmpty()) return@launch
+            
+            val combinedContent = tabs.joinToString("\n\n---\n\n") { tab ->
+                val titlePrefix = if (tab.title.isNullOrBlank()) "" else "${tab.title}\n"
+                titlePrefix + tab.content
+            }
+            
+            addTab(noteId, title = "Combined View", content = combinedContent)
+        }
+    }
+
 
     // --- Annotation Management ---
 
@@ -662,11 +914,19 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun rebuildNoteSummary(noteId: Long) {
         val tabs = repository.getTabsForNoteSync(noteId)
+        val note = repository.getNoteById(noteId)
         
         // Combine tab titles and contents for search indexing and previews
         val combinedContent = tabs.joinToString("\n\n") { tab ->
             val titlePart = if (tab.title.isNullOrBlank()) "" else "[${tab.title}]\n"
             "$titlePart${tab.content}"
+        }
+
+        if (note != null) {
+            val primaryTabTitle = tabs.firstOrNull()?.title?.trim()
+            if (!primaryTabTitle.isNullOrBlank() && note.title != primaryTabTitle) {
+                repository.updateTitleAndFolder(noteId, primaryTabTitle, note.folderId)
+            }
         }
         
         repository.updateContent(noteId, combinedContent)

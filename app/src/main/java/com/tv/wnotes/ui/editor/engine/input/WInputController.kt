@@ -36,7 +36,7 @@ class WInputController(
         editorState.updateSnapshot(newSnapshot)
     }
 
-    private fun applyMutation(result: WMutationResult) {
+    fun applyMutation(result: WMutationResult) {
         if (result is WMutationResult.Success) {
             val before = editorState.snapshot.value
             val operation = WOperation.GeneralMutation(
@@ -99,7 +99,14 @@ class WInputController(
                 clipboardManager.paste(snapshot, asPlainText = true)?.let { onOperation(it) }
             }
             WShortcut.SelectAll -> {
-                val newSelection = WSelectionManager.selectAll(snapshot.document.blocks)
+                val currentBlockId = snapshot.cursor.position.blockId
+                val newSelection = if (currentBlockId == "W_NOTE_TITLE") {
+                    // If in title, select only the title
+                    WSelectionManager.selectParagraph(snapshot.cursor.position, snapshot.document.blocks, snapshot.document.metadata.title)
+                } else {
+                    // Otherwise select everything in the note section
+                    WSelectionManager.selectAll(snapshot.document.blocks, snapshot.document.metadata.title)
+                }
                 editorState.updateSnapshot(snapshot.copy(selection = newSelection))
             }
         }

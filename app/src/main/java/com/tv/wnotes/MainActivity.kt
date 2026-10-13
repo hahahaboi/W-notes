@@ -1,10 +1,13 @@
 package com.tv.wnotes
 
+import android.graphics.Color as AndroidColor
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -21,9 +24,11 @@ import androidx.compose.material.icons.automirrored.outlined.Notes
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -52,6 +57,7 @@ import com.tv.wnotes.viewmodel.LinkPathViewModel
 import com.tv.wnotes.viewmodel.NoteViewModel
 import com.tv.wnotes.viewmodel.RoughNoteViewModel
 import com.tv.wnotes.viewmodel.SessionViewModel
+import com.tv.wnotes.viewmodel.SettingsViewModel
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -61,7 +67,21 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            WNotesTheme {
+            val settingsViewModel: SettingsViewModel = viewModel()
+            val savedDarkMode by settingsViewModel.darkMode.collectAsState()
+            val isDarkMode = savedDarkMode ?: isSystemInDarkTheme()
+
+            // Keep status/navigation bar icons readable against the chosen background.
+            LaunchedEffect(isDarkMode) {
+                val barStyle = if (isDarkMode) {
+                    SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+                } else {
+                    SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
+                }
+                enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
+            }
+
+            WNotesTheme(darkTheme = isDarkMode) {
                 val navController = rememberNavController()
                 var isDrawerOpen by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
@@ -110,7 +130,9 @@ class MainActivity : ComponentActivity() {
                                 folderViewModel = folderViewModel,
                                 linkPathViewModel = linkPathViewModel,
                                 onOpenDrawer = { isDrawerOpen = true },
-                                drawerProgress = sidebarProgress
+                                drawerProgress = sidebarProgress,
+                                isDarkMode = isDarkMode,
+                                onDarkModeChange = settingsViewModel::setDarkMode
                             )
 
                             FocusTimerSidebar(viewModel = sessionViewModel)
@@ -147,13 +169,24 @@ class MainActivity : ComponentActivity() {
 
                         // Drawer Sheet
                         val drawerWidth = 280.dp
+                        val drawerEdgeColor = MaterialTheme.colorScheme.outlineVariant
                         
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight()
                                 .width(drawerWidth)
                                 .offset { IntOffset(( (sidebarProgress - 1f) * drawerWidth.toPx() ).roundToInt(), 0) }
-                                .background(MaterialTheme.colorScheme.surface)
+                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                // Right edge line so the drawer stands apart from the dimmed screen in dark mode.
+                                .drawWithContent {
+                                    drawContent()
+                                    drawLine(
+                                        color = drawerEdgeColor,
+                                        start = androidx.compose.ui.geometry.Offset(size.width, 0f),
+                                        end = androidx.compose.ui.geometry.Offset(size.width, size.height),
+                                        strokeWidth = 1.dp.toPx()
+                                    )
+                                }
                                 .clickable(enabled = false) { } // Prevent clicks from going through to scrim
                         ) {
                             val drawerScrollState = rememberScrollState()
@@ -209,6 +242,14 @@ class MainActivity : ComponentActivity() {
                                         navController.navigate(Screen.Trash.route)
                                         isDrawerOpen = false
                                     }
+                                    DrawerRow(Icons.Outlined.Settings, "Settings", currentRoute == Screen.Settings.route) {
+                                        navController.navigate(Screen.Settings.route)
+                                        isDrawerOpen = false
+                                    }
+                                    DrawerRow(Icons.Outlined.Info, "About", currentRoute == Screen.About.route) { 
+                                        navController.navigate(Screen.About.route)
+                                        isDrawerOpen = false
+                                    }
 
                                     // Spacer for bottom accessibility on small screens
                                     Spacer(modifier = Modifier.height(48.dp))
@@ -229,10 +270,13 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun DrawerRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, isSelected: Boolean, onClick: () -> Unit) {
+    // The drawer sits outside the Scaffold, so set the text colour explicitly instead of inheriting it.
+    val textColor = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
-        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else Color.Transparent,
+        color = if (isSelected) MaterialTheme.colorScheme.surfaceContainerHighest else Color.Transparent,
+        contentColor = textColor,
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
     ) {
         Box(
@@ -260,7 +304,7 @@ fun DrawerRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: Stri
                             blendMode = BlendMode.DstIn
                         )
                     },
-                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                tint = textColor
             )
 
             // Title on the left, drawn on top
@@ -268,6 +312,7 @@ fun DrawerRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: Stri
                 text = title,
                 style = MaterialTheme.typography.titleMedium, // Decreased font size
                 fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                color = textColor,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(start = 20.dp)

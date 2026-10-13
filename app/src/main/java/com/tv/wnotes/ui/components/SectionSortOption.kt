@@ -8,7 +8,8 @@ enum class SectionSortOption(val label: String) {
     TITLE("Title A-Z"),
     WORD_COUNT("Word Count"),
     FOLDER("Folder"),
-    STARRED_FIRST("Starred First");
+    STARRED_FIRST("Starred First"),
+    INCOMPLETE("Incomplete");
 
     companion object {
         fun fromName(name: String?): SectionSortOption {
@@ -38,6 +39,7 @@ fun sortNotes(
         SectionSortOption.STARRED_FIRST -> regular.sortedWith(
             compareByDescending<Note> { it.isStarred }.thenByDescending { it.updatedAt }
         )
+        SectionSortOption.INCOMPLETE -> regular.filter { it.hasGoal && it.content.length < it.goalTargetLength }.sortedByDescending { it.updatedAt }
     }
     return pinned.sortedByDescending { it.updatedAt } + sortedRegular
 }

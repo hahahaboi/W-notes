@@ -2,6 +2,7 @@ package com.tv.wnotes.ui.editor
 
 import androidx.compose.runtime.*
 import androidx.compose.ui.geometry.Offset
+import com.tv.wnotes.ui.editor.engine.model.WBlock
 import com.tv.wnotes.ui.editor.engine.model.WDocument
 import com.tv.wnotes.ui.editor.engine.state.*
 import com.tv.wnotes.ui.editor.engine.logic.*
@@ -10,21 +11,24 @@ import com.tv.wnotes.ui.editor.engine.input.WShortcut
 import com.tv.wnotes.ui.editor.engine.clipboard.WClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
-import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.milliseconds
+import com.tv.wnotes.ui.editor.engine.state.WEditorState as EngineState
 
 /**
  * The bridge between the application and the WEditor engine.
  */
 @Stable
 class WEditorHost(
-    val engineState: com.tv.wnotes.ui.editor.engine.state.WEditorState,
-    val editorState: WEditorState,
-    val historyManager: WHistoryManager,
+    val engineState: EngineState,
     val inputController: WInputController,
-    val clipboardManager: WClipboardManager,
     val gestureCoordinator: WGestureCoordinator,
     val dragManager: WDragManager,
-    private val scope: kotlinx.coroutines.CoroutineScope
+    val verticalScrollState: androidx.compose.foundation.ScrollState,
+    private val scope: kotlinx.coroutines.CoroutineScope,
+    val onCreateTabWithSelection: (List<WBlock>) -> Unit = {},
+    val onAddToTab: (List<WBlock>) -> Unit = {},
+    val onCrossTabMove: (Long, Long, List<WSelectionRange>, WSelectionPoint, Boolean) -> Unit = { _, _, _, _, _ -> }
 ) {
     val snapshot: State<WEditorSnapshot> = engineState.snapshot
     private var pendingAnnotationJob: kotlinx.coroutines.Job? = null
@@ -47,12 +51,12 @@ class WEditorHost(
 
     fun dispatchCommand(command: WEditorCommand) {
         // Gesture Disambiguation: Cancel pending annotation show if any other gesture starts
-        if (command !is WEditorCommand.ShowAnnotation && command !is WEditorCommand.DismissAnnotation) {
-            pendingAnnotationJob?.cancel()
-        }
+                    if (command !is WEditorCommand.ShowAnnotation && command !is WEditorCommand.DismissAnnotation) {
+                        pendingAnnotationJob?.cancel()
+                    }
 
         // Automatic Dismissal: Dismiss current annotation if user interacts elsewhere
-        if (snapshot.value.activeAnnotationId != null) {
+        if (snapshot.value.activeAnnotationId != null || snapshot.value.activeTieIds != null || dragManager.state.phase == WDragPhase.COPY_ARMED) {
             when (command) {
                 is WEditorCommand.MoveCursor,
                 is WEditorCommand.SelectWord,
@@ -63,6 +67,10 @@ class WEditorHost(
                 is WEditorCommand.DeleteForward,
                 is WEditorCommand.SplitBlock -> {
                     engineState.dismissAnnotation()
+                    engineState.dismissTiePopup()
+                    if (dragManager.state.phase == WDragPhase.COPY_ARMED) {
+                        dragManager.cancel()
+                    }
                 }
                 else -> {}
             }
@@ -72,7 +80,7 @@ class WEditorHost(
             is WEditorCommand.ShowAnnotation -> {
                 pendingAnnotationJob?.cancel()
                 pendingAnnotationJob = scope.launch {
-                    kotlinx.coroutines.delay(300) // MULTI_TAP_TIMEOUT
+                    delay(300.milliseconds) // MULTI_TAP_TIMEOUT
                     engineState.showAnnotation(command.id)
                 }
             }
@@ -82,20 +90,77 @@ class WEditorHost(
             is WEditorCommand.ExtendSelection -> engineState.extendSelection(command.point)
             is WEditorCommand.UpdateActiveHandle -> engineState.updateActiveHandle(command.handleType)
             is WEditorCommand.MoveSelectionHandle -> engineState.moveSelectionHandle(command.handleType, command.point)
-            is WEditorCommand.ActivateSelection -> engineState.activateSelection(command.rangeId)
+            is WEditorCommand.ActivateSelection -> {
+                engineState.activateSelection(command.rangeId)
+                dragManager.armCopy()
+            }
             is WEditorCommand.RemoveSelectionRange -> engineState.removeSelectionRange(command.rangeId)
             is WEditorCommand.SetSelectionInteraction -> engineState.setInteractionMode(command.mode)
+            is WEditorCommand.SetSelection -> engineState.setSelection(command.selection)
             is WEditorCommand.ApplySpan -> {
                 val result = WMutationEngine.applySpanToSelection(engineState.snapshot.value, command.spanType)
-                engineState.applyMutation(result)
+                inputController.applyMutation(result)
             }
             is WEditorCommand.InsertBlock -> {
                 val result = WMutationEngine.insertBlock(engineState.snapshot.value, command.block, command.index)
-                engineState.applyMutation(result)
+                inputController.applyMutation(result)
             }
             is WEditorCommand.UpdateBlock -> {
                 val result = WMutationEngine.updateBlock(engineState.snapshot.value, command.block)
-                engineState.applyMutation(result)
+                inputController.applyMutation(result)
+            }
+            is WEditorCommand.ToggleBlockType -> {
+                val result = WMutationEngine.toggleBlockType(engineState.snapshot.value, command.type)
+                inputController.applyMutation(result)
+            }
+            is WEditorCommand.IncreaseIndent -> {
+                val result = WMutationEngine.adjustIndent(engineState.snapshot.value, 1)
+                inputController.applyMutation(result)
+            }
+            is WEditorCommand.DecreaseIndent -> {
+                val result = WMutationEngine.adjustIndent(engineState.snapshot.value, -1)
+                inputController.applyMutation(result)
+            }
+            is WEditorCommand.SetAlignment -> {
+                val result = WMutationEngine.setAlignment(engineState.snapshot.value, command.alignment)
+                inputController.applyMutation(result)
+            }
+            is WEditorCommand.SetFontSize -> {
+                val result = WMutationEngine.applyFontSize(engineState.snapshot.value, command.size)
+                inputController.applyMutation(result)
+            }
+            is WEditorCommand.AdjustFontSize -> {
+                val result = WMutationEngine.adjustFontSize(engineState.snapshot.value, command.delta)
+                inputController.applyMutation(result)
+            }
+            is WEditorCommand.ApplyFont -> {
+                val result = WMutationEngine.applyFont(engineState.snapshot.value, command.fontFamily)
+                inputController.applyMutation(result)
+            }
+            is WEditorCommand.UpdateTitle -> {
+                val result = WMutationEngine.updateTitle(engineState.snapshot.value, command.title, command.cursorOffset)
+                inputController.applyMutation(result)
+            }
+            is WEditorCommand.Undo -> inputController.onKeyboardShortcut(WShortcut.Undo)
+            is WEditorCommand.Redo -> inputController.onKeyboardShortcut(WShortcut.Redo)
+            is WEditorCommand.AIAssist -> {
+                // TODO: Connect to AI service
+                println("AI Assist requested for selection: ${snapshot.value.selection}")
+            }
+            is WEditorCommand.AddTextBox -> {
+                val result = WMutationEngine.addTextBox(engineState.snapshot.value)
+                inputController.applyMutation(result)
+            }
+            is WEditorCommand.SetDrawingMode -> {
+                if (command.active) {
+                    // Give the pen somewhere to draw: an area right below the cursor.
+                    inputController.applyMutation(WMutationEngine.ensureDrawingBlock(engineState.snapshot.value))
+                }
+                engineState.setDrawingMode(command.active)
+            }
+            is WEditorCommand.ActivateNormalText -> {
+                engineState.setDrawingMode(false)
+                engineState.clearSelection()
             }
             is WEditorCommand.ClearSelection -> engineState.clearSelection()
             is WEditorCommand.ClearSelectionAndHideCursor -> engineState.clearSelectionAndHideCursor()
@@ -108,16 +173,17 @@ class WEditorHost(
             is WEditorCommand.DeleteForward -> inputController.onDeleteForward()
             is WEditorCommand.NavigateCursor -> inputController.onNavigation(command.direction, gestureCoordinator.layoutProvider)
             is WEditorCommand.UpdateTelemetry -> engineState.updateTelemetry(command.transform)
+            is WEditorCommand.UpdateZoom -> engineState.updateZoom(command.zoom)
             is WEditorCommand.BeginDragSelection -> {
                 val currentSnapshot = engineState.snapshot.value
                 val currentSelection = currentSnapshot.selection
                 if (currentSelection.isActive && currentSelection.ranges.isNotEmpty()) {
                     dragManager.prepareLift(currentSelection.ranges, command.position, currentSnapshot)
                     scope.launch {
-                        kotlinx.coroutines.delay(150)
+                        delay(150.milliseconds)
                         dragManager.startLifting()
                         repeat(10) { i ->
-                            kotlinx.coroutines.delay(16)
+                            delay(16.milliseconds)
                             dragManager.updateLiftProgress((i + 1) / 10f)
                         }
                     }
@@ -131,7 +197,7 @@ class WEditorHost(
                 val lineHeightPx = 24 * density
                 val numLines = (distance / lineHeightPx).toInt().coerceAtLeast(1)
                 val result = WMutationEngine.extendDocument(currentSnapshot, numLines)
-                engineState.applyMutation(result)
+                inputController.applyMutation(result)
             }
             is WEditorCommand.StartPreparingLift -> dragManager.prepareLift(listOf(command.range), command.position, engineState.snapshot.value)
             is WEditorCommand.ExecuteLift -> dragManager.startLifting()
@@ -142,51 +208,85 @@ class WEditorHost(
             is WEditorCommand.CancelDrag -> dragManager.cancel()
             is WEditorCommand.CreateAnnotation -> {
                 val result = WMutationEngine.annotateRange(engineState.snapshot.value, command.content, command.range, command.anchorText)
-                if (result is WMutationResult.Success) {
-                    inputController.onOperation(WOperation.GeneralMutation(engineState.snapshot.value, result.snapshot, result.mutationType))
-                }
+                inputController.applyMutation(result)
             }
             is WEditorCommand.UpdateAnnotation -> {
                 val result = WMutationEngine.updateAnnotation(engineState.snapshot.value, command.id, command.content)
-                if (result is WMutationResult.Success) {
-                    inputController.onOperation(WOperation.GeneralMutation(engineState.snapshot.value, result.snapshot, result.mutationType))
-                }
+                inputController.applyMutation(result)
             }
             is WEditorCommand.DeleteAnnotation -> {
                 val result = WMutationEngine.deleteAnnotation(engineState.snapshot.value, command.id)
-                if (result is WMutationResult.Success) {
-                    inputController.onOperation(WOperation.GeneralMutation(engineState.snapshot.value, result.snapshot, result.mutationType))
-                }
+                inputController.applyMutation(result)
             }
             is WEditorCommand.DismissAnnotation -> engineState.dismissAnnotation()
             is WEditorCommand.StartCreatingAnnotation -> {
                 engineState.startCreatingAnnotation(command.range, command.anchorText)
             }
             is WEditorCommand.CancelCreatingAnnotation -> engineState.cancelCreatingAnnotation()
+            
+            is WEditorCommand.SetNavigationHighlight -> {
+                engineState.setNavigationHighlight(command.range)
+                if (command.range != null) {
+                    navigationHighlightJob?.cancel()
+                    navigationHighlightJob = scope.launch {
+                        delay(2000.milliseconds)
+                        engineState.setNavigationHighlight(null)
+                    }
+                }
+            }
+
+            is WEditorCommand.SetSearchHighlights -> {
+                engineState.setSearchHighlights(command.ranges, command.activeRange)
+            }
+
+            // Tab Ties
+            is WEditorCommand.StartTieTabs -> engineState.setTyingTabs(true)
+            is WEditorCommand.CancelTieTabs -> engineState.setTyingTabs(false)
+            is WEditorCommand.PlaceTabTie -> {
+                val result = WMutationEngine.createTie(
+                    engineState.snapshot.value,
+                    command.destinationTabId,
+                    command.range,
+                    command.anchorText
+                )
+                inputController.applyMutation(result)
+                engineState.setTyingTabs(false)
+            }
+            is WEditorCommand.ShowTabTieDestinations -> {
+                engineState.setActiveTieIds(command.tieIds)
+                if (!snapshot.value.isMarkerSidebarOpen) {
+                    engineState.toggleMarkerSidebar()
+                }
+            }
+            is WEditorCommand.JumpToTabTie -> {
+                val tie = snapshot.value.ties.find { it.id == command.tieId }
+                if (tie != null) {
+                    onCrossTabMove(
+                        tie.sourceTabId,
+                        tie.destinationTabId,
+                        emptyList<WSelectionRange>(),
+                        WSelectionPoint(tie.destinationBlockId, tie.destinationStartOffset),
+                        false
+                    )
+                }
+            }
+
             is WEditorCommand.ToggleMarkerSidebar -> engineState.toggleMarkerSidebar()
             is WEditorCommand.CreateMarker -> {
                 val result = WMutationEngine.createMarker(engineState.snapshot.value, command.label, command.range, command.anchorText)
-                if (result is WMutationResult.Success) {
-                    inputController.onOperation(WOperation.GeneralMutation(engineState.snapshot.value, result.snapshot, result.mutationType))
-                }
+                inputController.applyMutation(result)
             }
             is WEditorCommand.UpdateMarkerLabel -> {
                 val result = WMutationEngine.updateMarkerLabel(engineState.snapshot.value, command.id, command.newLabel)
-                if (result is WMutationResult.Success) {
-                    inputController.onOperation(WOperation.GeneralMutation(engineState.snapshot.value, result.snapshot, result.mutationType))
-                }
+                inputController.applyMutation(result)
             }
             is WEditorCommand.UpdateMarkerType -> {
                 val result = WMutationEngine.updateMarkerType(engineState.snapshot.value, command.id, command.newType)
-                if (result is WMutationResult.Success) {
-                    inputController.onOperation(WOperation.GeneralMutation(engineState.snapshot.value, result.snapshot, result.mutationType))
-                }
+                inputController.applyMutation(result)
             }
             is WEditorCommand.DeleteMarker -> {
                 val result = WMutationEngine.deleteMarker(engineState.snapshot.value, command.id)
-                if (result is WMutationResult.Success) {
-                    inputController.onOperation(WOperation.GeneralMutation(engineState.snapshot.value, result.snapshot, result.mutationType))
-                }
+                inputController.applyMutation(result)
             }
             is WEditorCommand.NavigateToMarker -> {
                 val marker = snapshot.value.markers.find { it.id == command.markerId }
@@ -195,7 +295,7 @@ class WEditorHost(
                     if (blockExists) {
                         engineState.setActiveMarker(marker.id)
                         val point = WSelectionPoint(marker.startBlockId, marker.startOffset)
-                        engineState.moveCursor(point, com.tv.wnotes.ui.editor.engine.logic.CursorAffinity.AFTER)
+                        engineState.moveCursor(point, CursorAffinity.AFTER)
                         
                         // Set temporary highlight
                         val range = WSelectionRange(
@@ -207,7 +307,7 @@ class WEditorHost(
                         // Clear highlight after delay
                         navigationHighlightJob?.cancel()
                         navigationHighlightJob = scope.launch {
-                            kotlinx.coroutines.delay(2000)
+                        delay(2000.milliseconds)
                             engineState.setNavigationHighlight(null)
                         }
                     } else {
@@ -230,7 +330,7 @@ class WEditorHost(
                     comparePoints(markerStart, cursor, blocks) > 0
                 } ?: currentMarkers.first() // Wrap around or stay at end? Phase 5: find first after caret
                 
-                nextMarker.let { dispatchCommand(WEditorCommand.NavigateToMarker(it.id)) }
+                dispatchCommand(WEditorCommand.NavigateToMarker(nextMarker.id))
             }
             is WEditorCommand.NavigateToPreviousMarker -> {
                 val currentMarkers = WMarkerManager.sortMarkers(snapshot.value.markers, snapshot.value.document.blocks)
@@ -245,11 +345,16 @@ class WEditorHost(
                     comparePoints(markerStart, cursor, blocks) < 0
                 } ?: currentMarkers.last()
                 
-                prevMarker.let { dispatchCommand(WEditorCommand.NavigateToMarker(it.id)) }
+                dispatchCommand(WEditorCommand.NavigateToMarker(prevMarker.id))
             }
             is WEditorCommand.OpenQuickJump -> engineState.setQuickJumpOpen(true)
             is WEditorCommand.CloseQuickJump -> engineState.setQuickJumpOpen(false)
-            is WEditorCommand.MakeTabFromSelection -> { /* Handled in remember block via lambda */ }
+            is WEditorCommand.CreateTabWithSelection -> onCreateTabWithSelection(command.selectedBlocks)
+            is WEditorCommand.AddToTab -> onAddToTab(command.selectedBlocks)
+            is WEditorCommand.SetGoal -> engineState.setGoal(command.point)
+            is WEditorCommand.MoveGoal -> engineState.moveGoal(command.point)
+            is WEditorCommand.RemoveGoal -> engineState.removeGoal()
+            is WEditorCommand.MakeTabFromSelection -> {} // Obsolete
             else -> println("WEditor Command Received: $command")
         }
     }
@@ -260,22 +365,36 @@ fun rememberWEditorHost(
     initialDocument: WDocument,
     initialAnnotations: List<com.tv.wnotes.data.local.entity.ContextAnnotation> = emptyList(),
     initialMarkers: List<com.tv.wnotes.data.local.entity.TextMarker> = emptyList(),
+    initialTies: List<TabTie> = emptyList(),
     initialSnapshot: WEditorSnapshot? = null,
     layoutProvider: WLayoutProvider = EmptyLayoutProvider,
-    onMakeTab: (String) -> Unit = {},
-    initialCursorAtEnd: Boolean = false
+    onCreateTabWithSelection: (List<WBlock>) -> Unit = {},
+    onAddToTab: (List<WBlock>) -> Unit = {},
+    initialCursorAtEnd: Boolean = false,
+    onCommand: (WEditorCommand) -> Unit = {},
+    onCrossTabMove: (Long, Long, List<WSelectionRange>, WSelectionPoint, Boolean) -> Unit = { _, _, _, _, _ -> }
 ): WEditorHost {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val currentOnMakeTab by rememberUpdatedState(onMakeTab)
+    val currentOnCreateTabWithSelection by rememberUpdatedState(onCreateTabWithSelection)
+    val currentOnAddToTab by rememberUpdatedState(onAddToTab)
+    val currentOnCommand by rememberUpdatedState(onCommand)
+    val currentOnCrossTabMove by rememberUpdatedState(onCrossTabMove)
 
     val host = remember(initialDocument.id) {
+        val tabId = initialDocument.id.toLongOrNull() ?: -1L
+        
         val engineState = if (initialSnapshot != null) {
-            com.tv.wnotes.ui.editor.engine.state.WEditorState(initialSnapshot)
+            EngineState(initialSnapshot)
         } else {
-            com.tv.wnotes.ui.editor.engine.state.WEditorState(initialDocument, initialAnnotations, initialMarkers, initialCursorAtEnd)
+            EngineState(
+                initialDocument,
+                initialAnnotations,
+                initialMarkers,
+                initialTies,
+                cursorAtEnd = initialCursorAtEnd
+            )
         }
-        val uiState = WEditorState(engineState.snapshot)
         val history = WHistoryManager()
         val clipboard = WClipboardManager(context)
         val input = WInputController(engineState, history, clipboard)
@@ -284,55 +403,52 @@ fun rememberWEditorHost(
         var hostInstance: WEditorHost? = null
         
         val onCommandProxy: (WEditorCommand) -> Unit = { command ->
-            if (command is WEditorCommand.MakeTabFromSelection) {
-                val selectedText = WSelectionManager.getSelectedText(
-                    engineState.snapshot.value.selection,
-                    engineState.snapshot.value.document.blocks
-                )
-                if (selectedText.isNotEmpty()) {
-                    currentOnMakeTab(selectedText)
-                    engineState.clearSelection()
-                }
-            } else {
-                hostInstance?.dispatchCommand(command)
-            }
+            currentOnCommand(command)
+            hostInstance?.dispatchCommand(command)
         }
 
         val drag = WDragManager(
-            layoutProvider = layoutProvider, 
+            tabId = tabId,
+            layoutProvider = layoutProvider,
             onEvent = { event ->
-                if (event is WDragEvent.DropExecuted) {
-                    val currentSnapshot = engineState.snapshot.value
-                    val normalization = WDropWhitespaceEngine.normalizeDropWhitespace(
-                        event.sourceRanges.first(),
-                        event.targetPoint,
-                        currentSnapshot.document
-                    )
-                    val result = WMutationEngine.moveRanges(
-                        currentSnapshot,
-                        event.sourceRanges,
-                        event.targetPoint,
-                        prefix = normalization.prefix,
-                        suffix = normalization.suffix,
-                        virtualLineCount = event.virtualLineCount
-                    )
-                    engineState.applyMutation(result)
+                when (event) {
+                    is WDragEvent.DropExecuted -> {
+                        val currentSnapshot = engineState.snapshot.value
+                        val normalization = WDropWhitespaceEngine.normalizeDropWhitespace(
+                            event.sourceRanges.first(),
+                            event.targetPoint,
+                            currentSnapshot.document
+                        )
+                        val result = WMutationEngine.moveRanges(
+                            currentSnapshot,
+                            event.sourceRanges,
+                            event.targetPoint,
+                            prefix = normalization.prefix,
+                            suffix = normalization.suffix,
+                            virtualLineCount = event.virtualLineCount,
+                            isCopy = event.isCopy
+                        )
+                        input.applyMutation(result)
+                    }
+                    else -> {}
                 }
             },
             onTelemetry = { engineState.updateTelemetry(it) }
         )
 
         val gesture = WGestureCoordinator(layoutProvider, onCommandProxy)
+        val scrollState = androidx.compose.foundation.ScrollState(initial = 0)
 
         WEditorHost(
             engineState = engineState,
-            editorState = uiState,
-            historyManager = history,
             inputController = input,
-            clipboardManager = clipboard,
             gestureCoordinator = gesture,
             dragManager = drag,
-            scope = scope
+            verticalScrollState = scrollState,
+            scope = scope,
+            onCreateTabWithSelection = { currentOnCreateTabWithSelection(it) },
+            onAddToTab = { currentOnAddToTab(it) },
+            onCrossTabMove = currentOnCrossTabMove
         ).also { hostInstance = it }
     }
 
@@ -358,12 +474,14 @@ private object EmptyLayoutProvider : WLayoutProvider {
     override fun isOffsetInsideSelection(offset: Offset): Boolean = false
     override fun getInsertionBeamForPoint(point: WSelectionPoint): androidx.compose.ui.geometry.Rect? = null
     override fun getSelectionBounds(): List<androidx.compose.ui.geometry.Rect> = emptyList()
+    override fun getSelectionBoundsForRange(range: WSelectionRange): List<androidx.compose.ui.geometry.Rect> = emptyList()
     override fun getAnnotationBounds(annotationId: String): List<androidx.compose.ui.geometry.Rect> = emptyList()
-    override fun getAnnotationGeometry(annotationId: String): com.tv.wnotes.ui.editor.engine.logic.AnnotationGeometry? = null
+    override fun getAnnotationGeometry(annotationId: String): AnnotationGeometry? = null
     override fun hitTest(offset: Offset): WHitResult? = null
     override fun getDocumentBottom(): Float = 0f
     override val density: Float = 1f
-    override val currentSelection: com.tv.wnotes.ui.editor.engine.state.WSelectionState? = null
+    override val zoom: Float = 1.0f
+    override val currentSelection: WSelectionState? = null
     override val currentBlocks: List<com.tv.wnotes.ui.editor.engine.model.WBlock> = emptyList()
     override val currentAnnotations: List<com.tv.wnotes.data.local.entity.ContextAnnotation> = emptyList()
     override fun getAnnotationsForBlock(blockId: String): List<com.tv.wnotes.data.local.entity.ContextAnnotation> = emptyList()

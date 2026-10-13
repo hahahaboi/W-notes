@@ -1,6 +1,9 @@
 package com.tv.wnotes.ui.editor.engine.renderer
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -9,27 +12,34 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tv.wnotes.ui.editor.engine.logic.WDragInternalState
+import com.tv.wnotes.ui.editor.engine.logic.WWordCountEngine
 import com.tv.wnotes.ui.editor.engine.state.WEditorSnapshot
 import com.tv.wnotes.ui.editor.engine.state.WDragPhase
+import com.tv.wnotes.ui.editor.engine.state.WSelectionRange
+import com.tv.wnotes.ui.editor.engine.state.WSelectionPoint
+import com.tv.wnotes.ui.editor.engine.model.WTextContainer
+import com.tv.wnotes.ui.editor.engine.logic.WEditorCommand
 import com.tv.wnotes.ui.editor.editorGestures
 import kotlinx.coroutines.flow.collectLatest
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * High-level component for rendering a WEditor document.
@@ -48,17 +58,19 @@ fun WEditorRenderer(
     gestureCoordinator: com.tv.wnotes.ui.editor.engine.logic.WGestureCoordinator,
     focusRequester: androidx.compose.ui.focus.FocusRequester,
     onGestureDetected: (String) -> Unit,
+    modifier: Modifier = Modifier,
     onCaretRendered: () -> Unit = {},
     onContentPositioned: (Offset) -> Unit = {},
-    modifier: Modifier = Modifier
 ) {
+    // Stable wrapper for coordinates to prevent unnecessary recompositions
+    val rootCoordinates = remember { WEditorRootCoordinates() }
     
     // Auto-scrolling logic
     val density = LocalDensity.current
     var editorSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     
     LaunchedEffect(snapshot.drag.phase, snapshot.drag.fingerPosition, editorCoordinates) {
-        if (snapshot.drag.phase == WDragPhase.DRAGGING && editorCoordinates != null) {
+        if ((snapshot.drag.phase == WDragPhase.DRAGGING) && (editorCoordinates != null)) {
             val rootPos = editorCoordinates.positionInParent()
             val fingerY = snapshot.drag.fingerPosition.y - rootPos.y // Local Y relative to editor top
             
@@ -68,16 +80,16 @@ fun WEditorRenderer(
             if (fingerY < threshold) {
                 // Near top - Scroll Up
                 val speed = ((threshold - fingerY) / threshold).coerceIn(0f, 1f) * 20f
-                while (snapshot.drag.phase == WDragPhase.DRAGGING && scrollState.value > 0) {
+                while ((snapshot.drag.phase == WDragPhase.DRAGGING) && scrollState.value > 0) {
+                    kotlinx.coroutines.delay(16.milliseconds)
                     scrollState.dispatchRawDelta(-speed)
-                    kotlinx.coroutines.delay(16)
                 }
             } else if (fingerY > viewportHeight - threshold) {
                 // Near bottom - Scroll Down
                 val speed = ((fingerY - (viewportHeight - threshold)) / threshold).coerceIn(0f, 1f) * 20f
                 while (snapshot.drag.phase == WDragPhase.DRAGGING && scrollState.value < scrollState.maxValue) {
                     scrollState.dispatchRawDelta(speed)
-                    kotlinx.coroutines.delay(16)
+                    kotlinx.coroutines.delay(16.milliseconds)
                 }
             }
         }
@@ -117,121 +129,311 @@ fun WEditorRenderer(
 
     val currentPlaceholderAlpha by animController.placeholderAlpha.asState()
     var contentRelativeOffset by remember { mutableStateOf(Offset.Zero) }
+    var boxRelativeOffset by remember { mutableStateOf(Offset.Zero) }
+    // Initialize with a large value so it doesn't start "stuck" at (0,0) before measurement
+    var toolbarRawY by remember { mutableFloatStateOf(2000f) }
+    
+    val horizontalScrollState = rememberScrollState()
+    val zoom = snapshot.settings.zoom
+
+    // Update layoutState with current zoom for hit-testing
+    SideEffect {
+        layoutState.zoom = zoom
+    }
+
+    // Pre-calculate dragged block IDs to optimize block rendering
+    val draggedBlockIds by remember(snapshot.drag.phase, snapshot.drag.selectedRanges, snapshot.document.blocks) {
+        derivedStateOf {
+            if (snapshot.drag.phase == WDragPhase.IDLE || snapshot.drag.isCopy) emptySet()
+            else {
+                val blocks = snapshot.document.blocks
+                val result = mutableSetOf<String>()
+                snapshot.drag.selectedRanges.forEach { range ->
+                    val norm = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(range, blocks)
+                    val s = blocks.indexOfFirst { it.id == norm.anchor.blockId }
+                    val e = blocks.indexOfFirst { it.id == norm.focus.blockId }
+                    if (s != -1 && e != -1) {
+                        for (i in s..e) result.add(blocks[i].id)
+                    }
+                }
+                result
+            }
+        }
+    }
 
     Box(modifier = modifier.onGloballyPositioned { editorSize = it.size }) {
-        var documentCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-        Column(
+
+        // 1. Zoomable Content Container
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(scrollState)
-                .padding(16.dp)
+                .graphicsLayer {
+                    scaleX = zoom
+                    scaleY = zoom
+                    transformOrigin = TransformOrigin(0f, 0f)
+                }
         ) {
-            TextField(
-                value = title,
-                onValueChange = onTitleChange,
-                placeholder = { Text("Title", style = MaterialTheme.typography.headlineMedium) },
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth(),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent
-                ),
-                textStyle = MaterialTheme.typography.headlineMedium
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .onGloballyPositioned { 
-                        documentCoordinates = it
+                    .fillMaxHeight()
+                    .verticalScroll(scrollState)
+                    .onGloballyPositioned { coords ->
+                        rootCoordinates.value = coords
                         editorCoordinates?.let { root ->
-                            val localPos = root.localPositionOf(it, Offset.Zero)
+                            val localPos = root.localPositionOf(coords, Offset.Zero)
                             contentRelativeOffset = localPos
                             onContentPositioned(localPos)
                         }
                     }
-                    .editorGestures(
-                        coordinator = gestureCoordinator,
-                        selectionState = snapshot.selection,
-                        dragPhase = snapshot.drag.phase,
-                        focusRequester = focusRequester,
-                        density = density.density,
-                        onGestureDetected = onGestureDetected
-                    )
-            ) {
-                Column {
-                    snapshot.document.blocks.forEach { block ->
-                        key(block.id) {
-                            WBlockRenderer(
-                                block = block,
-                                snapshot = snapshot,
-                                layoutState = layoutState,
-                                documentCoordinates = documentCoordinates,
-                                onTextLayout = { layoutState.layoutResults[block.id] = it },
-                                onCommand = { gestureCoordinator.onCommand(it) },
-                                placeholderAlpha = currentPlaceholderAlpha
-                            )
+                    .let { base ->
+                        if (editorSize.width > 0) {
+                            base.width(with(density) { (editorSize.width.toFloat() / zoom).toDp() })
+                        } else {
+                            base.fillMaxWidth()
                         }
                     }
+                    .padding(horizontal = 16.dp)
+            ) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Title section: its own panel, kept visually apart from the note body.
+                Surface(
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    WTitleEditor(
+                        snapshot = snapshot,
+                        title = title,
+                        onTitleChange = onTitleChange,
+                        layoutState = layoutState,
+                        onCommand = { gestureCoordinator.onCommand(it) },
+                        rootCoordinates = rootCoordinates,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
+                    )
                 }
-            }
 
-            // Infinite Scrolling Spacer
-            Spacer(modifier = Modifier.height(LocalConfiguration.current.screenHeightDp.dp))
+                // Visible gap between the title section and the toolbar.
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    thickness = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
+                Spacer(modifier = Modifier.height(14.dp))
 
-            // Real-time word count in editor - MEMOIZED & OPTIMIZED
-            val words by remember(snapshot.document.revision) {
-                derivedStateOf {
-                    var total = 0
-                    snapshot.document.blocks.forEach { block ->
-                        if (block is com.tv.wnotes.ui.editor.engine.model.WTextContainer) {
-                            val text = block.text
-                            if (text.isNotBlank()) {
-                                total += text.trim().split(Regex("\\s+")).size
+                // Placeholder for sticky toolbar
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .onGloballyPositioned { coords ->
+                            // Calculate position relative to the root viewport Box
+                            editorCoordinates?.let { root ->
+                                toolbarRawY = root.localPositionOf(coords, Offset.Zero).y
+                            }
+                        }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Separator band between the toolbar section and the notes section.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .background(
+                            MaterialTheme.colorScheme.surfaceContainerHighest,
+                            androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
+                        )
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coords ->
+                            rootCoordinates.value?.let { docRoot ->
+                                boxRelativeOffset = docRoot.localPositionOf(coords, Offset.Zero)
+                            }
+                        }
+                        .editorGestures(
+                            coordinator = gestureCoordinator,
+                            selectionState = snapshot.selection,
+                            dragPhase = snapshot.drag.phase,
+                            focusRequester = focusRequester,
+                            density = density.density,
+                            currentZoom = zoom,
+                            verticalScrollState = scrollState,
+                            horizontalScrollState = horizontalScrollState,
+                            onGestureDetected = onGestureDetected,
+                            coordinateTranslation = { boxRelativeOffset }
+                        )
+                ) {
+                    val renderContext = WBlockRenderContext(
+                        baseFontSize = snapshot.settings.fontSize,
+                        baseFontFamily = snapshot.settings.fontFamily,
+                        isDrawingMode = snapshot.isDrawingMode
+                    )
+                    CompositionLocalProvider(LocalWBlockRenderContext provides renderContext) {
+                    Column {
+                        snapshot.document.blocks.forEach { block ->
+                            val blockAnnotations = snapshot.annotationIndex[block.id] ?: emptyList()
+                            key(block.id) {
+                                WBlockRenderer(
+                                    block = block,
+                                    annotations = blockAnnotations,
+                                    layoutState = layoutState,
+                                    rootCoordinates = rootCoordinates,
+                                    onTextLayout = { layoutState.layoutResults[block.id] = it },
+                                    onCommand = { gestureCoordinator.onCommand(it) },
+                                    allBlocks = snapshot.document.blocks,
+                                    isBeingDragged = draggedBlockIds.contains(block.id),
+                                    placeholderAlpha = currentPlaceholderAlpha
+                                )
                             }
                         }
                     }
-                    total
+                    }
+
+                    // Render Goal Cursor and Light Gray Area if goal exists
+                    val goal = snapshot.goal
+                    if (goal != null) {
+                        val goalBeam = layoutState.getInsertionBeamForPoint(WSelectionPoint(goal.blockId, goal.offset))
+                        if (goalBeam != null) {
+                            val goalY = goalBeam.top
+                            val lastContentBlock = snapshot.document.blocks.lastOrNull { (it as? WTextContainer)?.text?.isNotBlank() == true }
+                            val lastContentY = if (lastContentBlock != null) {
+                                val blockOffset = layoutState.blockOffsets[lastContentBlock.id]?.y ?: 0f
+                                val blockHeight = layoutState.blockHeights[lastContentBlock.id] ?: 50f
+                                blockOffset + blockHeight
+                            } else {
+                                0f
+                            }
+
+                            if (goalY > lastContentY) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(with(density) { (goalY - lastContentY).toDp() })
+                                        .offset(y = with(density) { lastContentY.toDp() })
+                                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f))
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(32.dp)
+                                    .offset(y = with(density) { (goalY - 16.dp.toPx()).toDp() })
+                                    .pointerInput(goal) {
+                                        detectDragGestures(
+                                            onDrag = { change, dragAmount ->
+                                                change.consume()
+                                                val currentPos = goalBeam.center + Offset(0f, dragAmount.y)
+                                                val point = layoutState.getSelectionPointForOffset(currentPos)
+                                                if (point != null) {
+                                                    gestureCoordinator.onCommand(WEditorCommand.MoveGoal(point))
+                                                }
+                                            }
+                                        )
+                                    }
+                                    .pointerInput(goal) {
+                                        detectTapGestures(
+                                            onDoubleTap = {
+                                                gestureCoordinator.onCommand(WEditorCommand.RemoveGoal)
+                                            }
+                                        )
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                HorizontalDivider(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    thickness = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 16.dp)
+                                ) {
+                                    Text(
+                                        text = "Goal",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
+
+                // Infinite Scrolling Spacer
+                Spacer(modifier = Modifier.height(LocalConfiguration.current.screenHeightDp.dp))
+
+                // Real-time word count in editor - OPTIMIZED ALGORITHM
+                val words by remember(snapshot.document.revision) {
+                    derivedStateOf {
+                        WWordCountEngine.countWords(snapshot.document.blocks)
+                    }
+                }
+                Text(
+                    text = "$words words",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.align(Alignment.End).padding(top = 8.dp)
+                )
             }
-            Text(
-                text = "$words words",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier.align(Alignment.End).padding(top = 8.dp)
+
+            // Overlay for Cursors and Selection Highlights (Scales with content)
+            EditorOverlayLayer(
+                snapshot = snapshot,
+                layoutState = layoutState,
+                cursorBlinkVisible = cursorBlinkVisible,
+                contentRelativeOffset = { contentRelativeOffset }
             )
+
+            // Selection Handles (Scales with content)
+            if (snapshot.drag.phase == WDragPhase.IDLE) {
+                WSelectionHandleRenderer(
+                    selectionState = snapshot.selection,
+                    contentRelativeOffset = { contentRelativeOffset },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            // Insertion Caret (Scales with content)
+            if (snapshot.drag.phase != WDragPhase.IDLE) {
+                WInsertionCaretRenderer(
+                    caretState = snapshot.drag.insertionCaret,
+                    onRendered = onCaretRendered,
+                    modifier = Modifier.fillMaxSize().graphicsLayer {
+                        translationX = contentRelativeOffset.x
+                        translationY = contentRelativeOffset.y
+                    }
+                )
+            }
         }
 
-        // Overlay for Cursors and Selection Highlights
-        EditorOverlayLayer(
-            snapshot = snapshot,
-            layoutState = layoutState,
-            cursorBlinkVisible = cursorBlinkVisible,
-            contentRelativeOffset = { contentRelativeOffset }
-        )
-
-        // Selection Handles - Also moved here for perfect sync and low latency
-        if (snapshot.drag.phase == WDragPhase.IDLE) {
-            WSelectionHandleRenderer(
-                selectionState = snapshot.selection,
-                contentRelativeOffset = { contentRelativeOffset },
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-
-        // Insertion Caret
-        if (snapshot.drag.phase != WDragPhase.IDLE) {
-            WInsertionCaretRenderer(
-                caretState = snapshot.drag.insertionCaret,
-                onRendered = onCaretRendered,
-                modifier = Modifier.fillMaxSize().graphicsLayer {
-                    translationX = contentRelativeOffset.x
-                    translationY = contentRelativeOffset.y
+        // 2. Sticky Toolbar Overlay (OUTSIDE zoomable box, STAYS UNSCALED)
+        val isStuck = toolbarRawY <= 0
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset { 
+                    // When toolbarRawY > 0, it follows scroll. When <= 0, it stays at 0.
+                    IntOffset(0, toolbarRawY.coerceAtLeast(0f).toInt()) 
                 }
+                .padding(horizontal = 16.dp)
+                .then(if (isStuck) Modifier.shadow(4.dp) else Modifier)
+        ) {
+            com.tv.wnotes.ui.editor.WFormattingToolbar(
+                snapshot = snapshot,
+                onCommand = { gestureCoordinator.onCommand(it) }
             )
         }
     }
@@ -245,7 +447,10 @@ private fun EditorOverlayLayer(
     contentRelativeOffset: () -> Offset
 ) {
     val selectionColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+    val copyArmedColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f)
     val highlightColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f)
+    val searchHighlightColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.25f)
+    val activeSearchHighlightColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
     val colorScheme = MaterialTheme.colorScheme
     val cursorColor = MaterialTheme.colorScheme.primary
     
@@ -253,6 +458,8 @@ private fun EditorOverlayLayer(
     val normalizedRanges = remember(snapshot.selection.ranges, snapshot.document.blocks) {
         snapshot.selection.ranges.map { com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(it, snapshot.document.blocks) }
     }
+
+    val isCopyMode = snapshot.drag.phase == WDragPhase.COPY_ARMED || (snapshot.drag.phase != WDragPhase.IDLE && snapshot.drag.isCopy)
     
     val normalizedHighlight = remember(snapshot.navigationHighlightRange, snapshot.document.blocks) {
         snapshot.navigationHighlightRange?.let { com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(it, snapshot.document.blocks) }
@@ -276,31 +483,117 @@ private fun EditorOverlayLayer(
         val blockOffsets = layoutState.blockOffsets
         val blocks = snapshot.document.blocks
 
+        val drawRangeHighlight: (WSelectionRange, Color) -> Unit = { range, color ->
+            val normalized = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.normalize(range, blocks)
+            if (normalized.anchor.blockId == "W_NOTE_TITLE") {
+                layoutState.titleLayoutResult?.let { layout ->
+                    val textLength = layout.layoutInput.text.length
+                    val start = normalized.anchor.offset.coerceIn(0, textLength)
+                    val end = if (normalized.focus.blockId == "W_NOTE_TITLE") {
+                        normalized.focus.offset.coerceIn(0, textLength)
+                    } else {
+                        textLength
+                    }.coerceIn(0, textLength)
+                    if (start < end) {
+                        layout.selectionPathOrNull(start, end)?.let { path ->
+                            val titleOffset = layoutState.titleOffset
+                            withTransform({
+                                translate(titleOffset.x, titleOffset.y)
+                            }) {
+                                drawPath(path, color)
+                            }
+                        }
+                    }
+                }
+            } else {
+                val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+                val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+
+                if (startIdx != -1 && endIdx != -1) {
+                    for (i in startIdx..endIdx) {
+                        val block = blocks[i]
+                        val layout = layoutResults[block.id] ?: continue
+                        val offset = blockOffsets[block.id] ?: Offset.Zero
+
+                        val textLength = layout.layoutInput.text.length
+                        val hStart = if (i == startIdx) normalized.anchor.offset.coerceIn(0, textLength) else 0
+                        val hEnd = if (i == endIdx) normalized.focus.offset.coerceIn(0, textLength) else textLength
+
+                        if (hStart < hEnd) {
+                            layout.selectionPathOrNull(hStart, hEnd)?.let { path ->
+                                withTransform({
+                                    translate(offset.x, offset.y)
+                                }) {
+                                    drawPath(path, color)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Draw Search Highlights
+        val activeSearchRange = snapshot.activeSearchHighlightRange
+        snapshot.searchHighlightRanges.forEach { range ->
+            if (range != activeSearchRange) {
+                drawRangeHighlight(range, searchHighlightColor)
+            }
+        }
+        if (activeSearchRange != null) {
+            drawRangeHighlight(activeSearchRange, activeSearchHighlightColor)
+        }
+
         // 1. Draw Selection Highlights
         if (snapshot.selection.isActive) {
+            val currentColor = if (isCopyMode) copyArmedColor else selectionColor
             normalizedRanges.forEach { normalized ->
-                blocks.forEach { block ->
-                    val layout = layoutResults[block.id] ?: return@forEach
-                    val offset = blockOffsets[block.id] ?: Offset.Zero
-                    
-                    val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
-                    val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
-                    val currentIdx = blocks.indexOfFirst { it.id == block.id }
-
-                    if (currentIdx in startIdx..endIdx && startIdx != -1 && endIdx != -1) {
-                        val selectionStart = if (currentIdx == startIdx) normalized.anchor.offset else 0
-                        val selectionEnd = if (currentIdx == endIdx) normalized.focus.offset else {
-                            if (block is com.tv.wnotes.ui.editor.engine.model.WTextBlock) block.text.length 
-                            else if (block is com.tv.wnotes.ui.editor.engine.model.WChecklistBlock) block.text.length
-                            else 0
+                
+                // Handle Title Selection
+                if (normalized.anchor.blockId == "W_NOTE_TITLE") {
+                    layoutState.titleLayoutResult?.let { layout ->
+                        val textLength = layout.layoutInput.text.length
+                        val start = normalized.anchor.offset.coerceIn(0, textLength)
+                        val end = if (normalized.focus.blockId == "W_NOTE_TITLE") {
+                            normalized.focus.offset.coerceIn(0, textLength)
+                        } else {
+                            textLength
+                        }.coerceIn(0, textLength)
+                        if (start < end) {
+                            layout.selectionPathOrNull(start, end)?.let { path ->
+                                val titleOffset = layoutState.titleOffset
+                                withTransform({
+                                    translate(titleOffset.x, titleOffset.y)
+                                }) {
+                                    drawPath(path, currentColor)
+                                }
+                            }
                         }
+                    }
+                    if (normalized.focus.blockId == "W_NOTE_TITLE") return@forEach
+                }
+
+                val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+                val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+
+                // Stale ranges are ignored during draw phase to prevent crashes or visual artifacts
+                if (startIdx != -1 && endIdx != -1) {
+                    for (i in startIdx..endIdx) {
+                        val block = blocks[i]
+                        val layout = layoutResults[block.id] ?: continue
+                        val offset = blockOffsets[block.id] ?: Offset.Zero
+
+                        val textLength = layout.layoutInput.text.length
+                        val selectionStart = if (i == startIdx) normalized.anchor.offset.coerceIn(0, textLength) else 0
+                        val selectionEnd = if (i == endIdx) normalized.focus.offset.coerceIn(0, textLength) else textLength
 
                         if (selectionStart < selectionEnd) {
-                            val path = layout.getPathForRange(selectionStart, selectionEnd)
-                            withTransform({
-                                translate(offset.x, offset.y)
-                            }) {
-                                drawPath(path, selectionColor)
+                            layout.selectionPathOrNull(selectionStart, selectionEnd)?.let { path ->
+                                withTransform({
+                                    translate(offset.x, offset.y)
+                                }) {
+                                    drawPath(path, currentColor)
+                                }
                             }
                         }
                     }
@@ -312,35 +605,33 @@ private fun EditorOverlayLayer(
         snapshot.markers.forEach { marker ->
             val color = com.tv.wnotes.ui.editor.getMarkerTypeColor(marker.type, colorScheme).copy(alpha = 0.8f)
 
-            blocks.forEach { block ->
-                val layout = layoutResults[block.id] ?: return@forEach
-                val offset = blockOffsets[block.id] ?: Offset.Zero
+            val startIdx = blocks.indexOfFirst { it.id == marker.startBlockId }
+            val endIdx = blocks.indexOfFirst { it.id == marker.endBlockId }
 
-                val startIdx = blocks.indexOfFirst { it.id == marker.startBlockId }
-                val endIdx = blocks.indexOfFirst { it.id == marker.endBlockId }
-                val currentIdx = blocks.indexOfFirst { it.id == block.id }
+            if (startIdx != -1 && endIdx != -1) {
+                for (i in startIdx..endIdx) {
+                    val block = blocks[i]
+                    val layout = layoutResults[block.id] ?: continue
+                    val offset = blockOffsets[block.id] ?: Offset.Zero
 
-                if (currentIdx in startIdx..endIdx && startIdx != -1 && endIdx != -1) {
-                    val mStart = if (currentIdx == startIdx) marker.startOffset else 0
-                    val mEnd = if (currentIdx == endIdx) marker.endOffset else {
-                        if (block is com.tv.wnotes.ui.editor.engine.model.WTextBlock) block.text.length
-                        else if (block is com.tv.wnotes.ui.editor.engine.model.WChecklistBlock) block.text.length
-                        else 0
-                    }
+                    val textLength = layout.layoutInput.text.length
+                    val mStart = if (i == startIdx) marker.startOffset.coerceIn(0, textLength) else 0
+                    val mEnd = if (i == endIdx) marker.endOffset.coerceIn(0, textLength) else textLength
 
                     if (mStart < mEnd) {
-                        val path = layout.getPathForRange(mStart, mEnd)
-                        withTransform({
-                            translate(offset.x, offset.y)
-                        }) {
-                            drawPath(
-                                path = path,
-                                color = color,
-                                style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                    width = 1.dp.toPx(),
-                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+                        layout.selectionPathOrNull(mStart, mEnd)?.let { path ->
+                            withTransform({
+                                translate(offset.x, offset.y)
+                            }) {
+                                drawPath(
+                                    path = path,
+                                    color = color,
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                        width = 1.dp.toPx(),
+                                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+                                    )
                                 )
-                            )
+                            }
                         }
                     }
                 }
@@ -351,28 +642,27 @@ private fun EditorOverlayLayer(
         if (highlightAlpha > 0f) {
             normalizedHighlight?.let { normalized ->
                 val color = highlightColor.copy(alpha = highlightColor.alpha * highlightAlpha)
-                blocks.forEach { block ->
-                    val layout = layoutResults[block.id] ?: return@forEach
-                    val offset = blockOffsets[block.id] ?: Offset.Zero
+                
+                val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+                val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
 
-                    val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
-                    val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
-                    val currentIdx = blocks.indexOfFirst { it.id == block.id }
+                if (startIdx != -1 && endIdx != -1) {
+                    for (i in startIdx..endIdx) {
+                        val block = blocks[i]
+                        val layout = layoutResults[block.id] ?: continue
+                        val offset = blockOffsets[block.id] ?: Offset.Zero
 
-                    if (currentIdx in startIdx..endIdx && startIdx != -1 && endIdx != -1) {
-                        val selectionStart = if (currentIdx == startIdx) normalized.anchor.offset else 0
-                        val selectionEnd = if (currentIdx == endIdx) normalized.focus.offset else {
-                            if (block is com.tv.wnotes.ui.editor.engine.model.WTextBlock) block.text.length
-                            else if (block is com.tv.wnotes.ui.editor.engine.model.WChecklistBlock) block.text.length
-                            else 0
-                        }
+                        val textLength = layout.layoutInput.text.length
+                        val selectionStart = if (i == startIdx) normalized.anchor.offset.coerceIn(0, textLength) else 0
+                        val selectionEnd = if (i == endIdx) normalized.focus.offset.coerceIn(0, textLength) else textLength
 
                         if (selectionStart < selectionEnd) {
-                            val path = layout.getPathForRange(selectionStart, selectionEnd)
-                            withTransform({
-                                translate(offset.x, offset.y)
-                            }) {
-                                drawPath(path, color)
+                            layout.selectionPathOrNull(selectionStart, selectionEnd)?.let { path ->
+                                withTransform({
+                                    translate(offset.x, offset.y)
+                                }) {
+                                    drawPath(path, color)
+                                }
                             }
                         }
                     }
@@ -388,7 +678,8 @@ private fun EditorOverlayLayer(
         val blockOffset = blockOffsets[cursorPosition.blockId] ?: Offset.Zero
 
         if (cursorLayout != null && cursorState.isVisible && cursorBlinkVisible && !isDragging) {
-            val rect = cursorLayout.getCursorRect(cursorPosition.offset.coerceIn(0, cursorLayout.layoutInput.text.length))
+            val validOffset = cursorLayout.validOffsetOrNull(cursorPosition.offset) ?: return@Canvas
+            val rect = cursorLayout.getCursorRect(validOffset)
             // Ensure minimum height for visibility
             val cursorHeight = if (rect.height < 5f) 20.dp.toPx() else rect.height
             drawRect(

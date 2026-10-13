@@ -6,12 +6,14 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.tv.wnotes.ui.about.AboutScreen
 import com.tv.wnotes.ui.editor.NoteEditorScreen
 import com.tv.wnotes.ui.folders.FolderDetailScreen
 import com.tv.wnotes.ui.folders.FoldersScreen
 import com.tv.wnotes.ui.home.*
 import com.tv.wnotes.ui.paths.LinkPathsScreen
 import com.tv.wnotes.ui.paths.PathDetailScreen
+import com.tv.wnotes.ui.settings.SettingsScreen
 import com.tv.wnotes.viewmodel.FolderViewModel
 import com.tv.wnotes.viewmodel.LinkPathViewModel
 import com.tv.wnotes.viewmodel.NoteViewModel
@@ -23,7 +25,9 @@ fun NavGraph(
     folderViewModel: FolderViewModel,
     linkPathViewModel: LinkPathViewModel,
     onOpenDrawer: () -> Unit,
-    drawerProgress: Float
+    drawerProgress: Float,
+    isDarkMode: Boolean,
+    onDarkModeChange: (Boolean) -> Unit
 ) {
     NavHost(
         navController = navController,
@@ -188,6 +192,18 @@ fun NavGraph(
             )
         }
 
+        composable(Screen.About.route) {
+            AboutScreen()
+        }
+
+        composable(Screen.Settings.route) {
+            SettingsScreen(
+                isDarkMode = isDarkMode,
+                onDarkModeChange = onDarkModeChange,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
         composable(Screen.Folders.route) { backStackEntry ->
             val parentId = backStackEntry.arguments?.getLong("parentId")
             FoldersScreen(
@@ -265,7 +281,7 @@ fun NavGraph(
                 noteViewModel = noteViewModel,
                 onBack = { navController.popBackStack() },
                 onNoteClick = { noteId ->
-                    navController.navigate(Screen.Editor.createRoute(noteId, pathId))
+                    navController.navigate(Screen.Editor.createRoute(noteId = noteId, pathId = pathId))
                 },
                 onNavigateToGroup = { id, name ->
                     navController.navigate(Screen.GroupDetail.createRoute(id, name))
@@ -289,24 +305,30 @@ fun NavGraph(
                 navArgument("folderId") {
                     type = NavType.LongType
                     defaultValue = -1L
+                },
+                navArgument("tabId") {
+                    type = NavType.LongType
+                    defaultValue = -1L
                 }
             )
         ) { backStackEntry ->
             val noteId = backStackEntry.arguments?.getLong("noteId")
             val pathId = backStackEntry.arguments?.getLong("pathId")
             val folderId = backStackEntry.arguments?.getLong("folderId")
+            val tabId = backStackEntry.arguments?.getLong("tabId")
             NoteEditorScreen(
                 noteId = if (noteId == -1L) null else noteId,
                 pathId = if (pathId == -1L) null else pathId,
                 folderId = if (folderId == -1L) null else folderId,
+                initialTabId = if (tabId == -1L || tabId == null) null else tabId,
                 viewModel = noteViewModel,
                 folderViewModel = folderViewModel,
                 linkPathViewModel = linkPathViewModel,
                 onBack = {
                     navController.popBackStack()
                 },
-                onNavigateToNote = { id, pId ->
-                    navController.navigate(Screen.Editor.createRoute(id, pId)) {
+                onNavigateToNote = { id: Long, tId: Long? ->
+                    navController.navigate(Screen.Editor.createRoute(id, tabId = tId)) {
                         popUpTo(Screen.Editor.route) { inclusive = true }
                     }
                 }

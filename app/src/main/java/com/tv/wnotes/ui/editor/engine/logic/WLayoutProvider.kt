@@ -3,6 +3,7 @@ package com.tv.wnotes.ui.editor.engine.logic
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import com.tv.wnotes.ui.editor.engine.state.WSelectionPoint
+import com.tv.wnotes.ui.editor.engine.state.WSelectionRange
 
 /**
  * Interface for components that can translate screen coordinates to document positions.
@@ -30,6 +31,11 @@ interface WLayoutProvider {
     fun getSelectionBounds(): List<Rect>
 
     /**
+     * Returns the bounding boxes for a specific range.
+     */
+    fun getSelectionBoundsForRange(range: WSelectionRange): List<Rect>
+
+    /**
      * Performs a hit-test to find the document position at a given screen offset.
      */
     fun hitTest(offset: Offset): WHitResult?
@@ -53,6 +59,11 @@ interface WLayoutProvider {
      * Current display density.
      */
     val density: Float
+
+    /**
+     * Current zoom scale.
+     */
+    val zoom: Float
 
     /**
      * Current selection state.

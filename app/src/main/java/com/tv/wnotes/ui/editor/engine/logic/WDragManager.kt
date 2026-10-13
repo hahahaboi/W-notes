@@ -9,6 +9,7 @@ import com.tv.wnotes.ui.editor.engine.state.*
  * Single source of truth for the drag lifecycle.
  */
 class WDragManager(
+    private val tabId: Long,
     private var layoutProvider: WLayoutProvider,
     private val onEvent: (WDragEvent) -> Unit,
     private val onTelemetry: ((WTelemetryState) -> WTelemetryState) -> Unit = {}
@@ -21,19 +22,35 @@ class WDragManager(
     }
 
     /**
-     * Transition: IDLE -> PREPARING_LIFT
+     * Transition: IDLE -> COPY_ARMED
+     * Indicates that the next drag should be a copy operation.
+     */
+    fun armCopy() {
+        if (state.phase == WDragPhase.IDLE) {
+            _state.value = state.copy(
+                phase = WDragPhase.COPY_ARMED,
+                isCopy = true
+            )
+            println("STAGE 4a: Copy Mode Armed")
+        }
+    }
+
+    /**
+     * Transition: IDLE/COPY_ARMED -> PREPARING_LIFT
      */
     fun prepareLift(ranges: List<WSelectionRange>, position: Offset, snapshot: WEditorSnapshot) {
-        println("DROP STAGE 1: Drag Started")
+        println("DROP STAGE 1: Drag Started in Tab $tabId")
+        val isCopy = (state.phase == WDragPhase.COPY_ARMED) || state.isCopy
         onTelemetry { it.copy(dragPhase = WDragPhase.PREPARING_LIFT, pointerPosition = position) }
-        println("STAGE 5: prepareLift() for ranges $ranges at $position")
+        println("STAGE 5: prepareLift() for ranges $ranges at $position (isCopy=$isCopy)")
         val preview = WDragPreviewManager.buildPreview(snapshot, layoutProvider, position, ranges)
         _state.value = WDragState(
             phase = WDragPhase.PREPARING_LIFT,
             selectedRanges = ranges,
             fingerPosition = position,
             liftProgress = 0f,
-            preview = preview
+            preview = preview,
+            isCopy = isCopy
         )
         println("STAGE 6: dragState = PreparingLift")
     }
@@ -79,7 +96,7 @@ class WDragManager(
      * Updates current finger position and calculates insertion caret.
      */
     fun updatePosition(position: Offset, snapshot: WEditorSnapshot) {
-        if (state.phase == WDragPhase.IDLE) return
+        if (state.phase == WDragPhase.IDLE || state.phase == WDragPhase.COPY_ARMED) return
         
         onTelemetry { it.copy(currentStage = 2, pointerPosition = position, dragPhase = state.phase) }
 
@@ -134,7 +151,13 @@ class WDragManager(
         
         if (state.phase == WDragPhase.DRAGGING && ranges.isNotEmpty() && targetPoint != null && state.insertionCaret.isValidTarget) {
             _state.value = state.copy(phase = WDragPhase.DROPPED)
-            onEvent(WDragEvent.DropExecuted(ranges, targetPoint, virtualLines))
+            
+            try {
+                onEvent(WDragEvent.DropExecuted(ranges, targetPoint, virtualLines, state.isCopy))
+            } catch (e: Exception) {
+                e.printStackTrace()
+                cancel()
+            }
         } else {
             cancel()
         }

@@ -1,13 +1,11 @@
 package com.tv.wnotes.ui.home
 
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,9 +19,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.tv.wnotes.data.local.entity.Note
+import com.tv.wnotes.ui.components.HorizontalStapleConnector
 import com.tv.wnotes.ui.components.NoteWorkspaceScreen
 import com.tv.wnotes.ui.components.WScrollbar
 import com.tv.wnotes.ui.components.WScrollbarOrientation
+import com.tv.wnotes.ui.paths.PathNoteCard
 import com.tv.wnotes.viewmodel.FolderViewModel
 import com.tv.wnotes.viewmodel.LinkPathViewModel
 import com.tv.wnotes.viewmodel.NoteViewModel
@@ -56,7 +56,7 @@ fun GroupDetailScreen(
 
     val density = LocalDensity.current
     var draggingItemIndex by remember { mutableStateOf<Int?>(null) }
-    var deltaX by remember { mutableStateOf(0f) }
+    var deltaX by remember { mutableFloatStateOf(0f) }
 
     Scaffold(
         topBar = {
@@ -106,31 +106,39 @@ fun GroupDetailScreen(
                     ) {
                         itemsIndexed(editableNotes, key = { _, note -> note.id }) { index, note ->
                             val isDragging = draggingItemIndex == index
-                            val zIndex = if (isDragging) 1f else 0f
+                            val zIndex = if (isDragging) 10f else 0f
                             val translationX = if (isDragging) deltaX else 0f
                             
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
+                                    .animateItem()
                                     .zIndex(zIndex)
                                     .graphicsLayer { this.translationX = translationX }
                                     .pointerInput(editableNotes) {
                                         detectDragGesturesAfterLongPress(
-                                            onDragStart = { draggingItemIndex = index },
+                                            onDragStart = { draggingItemIndex = index; deltaX = 0f },
                                             onDrag = { change, dragAmount ->
                                                 change.consume()
                                                 deltaX += dragAmount.x
                                                 
-                                                val itemWidthPx = with(density) { 200.dp.toPx() }
-                                                val targetIndex = if (deltaX > itemWidthPx / 2) index + 1 else if (deltaX < -itemWidthPx / 2) index - 1 else index
+                                                val itemWidthPx = with(density) { 196.dp.toPx() }
+                                                val curIdx = draggingItemIndex ?: index
 
-                                                if (targetIndex in editableNotes.indices && targetIndex != index) {
+                                                if (deltaX > itemWidthPx * 0.5f && curIdx < editableNotes.size - 1) {
                                                     val newList = editableNotes.toMutableList()
-                                                    val movedNote = newList.removeAt(index)
-                                                    newList.add(targetIndex, movedNote)
+                                                    val movedNote = newList.removeAt(curIdx)
+                                                    newList.add(curIdx + 1, movedNote)
                                                     editableNotes = newList
-                                                    draggingItemIndex = targetIndex
-                                                    deltaX = 0f
+                                                    draggingItemIndex = curIdx + 1
+                                                    deltaX -= itemWidthPx
+                                                } else if (deltaX < -itemWidthPx * 0.5f && curIdx > 0) {
+                                                    val newList = editableNotes.toMutableList()
+                                                    val movedNote = newList.removeAt(curIdx)
+                                                    newList.add(curIdx - 1, movedNote)
+                                                    editableNotes = newList
+                                                    draggingItemIndex = curIdx - 1
+                                                    deltaX += itemWidthPx
                                                 }
                                             },
                                             onDragEnd = { draggingItemIndex = null; deltaX = 0f },
@@ -138,20 +146,15 @@ fun GroupDetailScreen(
                                         )
                                     }
                             ) {
-                                com.tv.wnotes.ui.paths.PathNoteCard(
+                                PathNoteCard(
                                     note = note,
                                     folderName = folders.find { it.id == note.folderId }?.name,
-                                    onClick = { },
+                                    onClick = { onNoteClick(note.id) },
                                     isDragging = isDragging
                                 )
                                 
                                 if (index < editableNotes.size - 1) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
-                                        modifier = Modifier.padding(horizontal = 8.dp).size(24.dp)
-                                    )
+                                    HorizontalStapleConnector()
                                 }
                             }
                         }

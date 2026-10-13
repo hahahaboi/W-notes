@@ -19,7 +19,6 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.unit.dp
 import com.tv.wnotes.ui.editor.engine.input.WShortcut
 import com.tv.wnotes.ui.editor.engine.logic.WEditorCommand
 import com.tv.wnotes.ui.editor.engine.logic.NavigationDirection
@@ -86,7 +85,7 @@ fun WEditorInputLayer(
                     if (inserted.isNotEmpty()) {
                         val now = System.currentTimeMillis()
                         // If we see the same text inserted twice within 50ms, it's likely a duplicate from the IME
-                        if ((inserted != lastInsertedText) || (now - lastInsertedTime > 50)) {
+                        if ((inserted != lastInsertedText) || ((now - lastInsertedTime) > 50)) {
                             host.inputController.onCommitText(inserted)
                             lastInsertedText = inserted
                             lastInsertedTime = now
@@ -146,7 +145,7 @@ private fun handleHardwareKey(
         else -> null
     }
 
-    if (digit != null && !isCtrl) {
+    if ((digit != null) && !isCtrl) {
         onTextHandled(digit)
         return true
     }

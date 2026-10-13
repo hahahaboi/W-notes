@@ -22,7 +22,6 @@ import com.tv.wnotes.ui.editor.engine.state.WEditorSnapshot
 @Composable
 fun WDragPreviewRenderer(
     previewState: WDragPreviewState,
-    snapshot: WEditorSnapshot,
     animController: WDragAnimationController,
     modifier: Modifier = Modifier
 ) {
@@ -67,12 +66,13 @@ fun WDragPreviewRenderer(
             content.blocks.forEach { block ->
                 WBlockRenderer(
                     block = block,
-                    snapshot = snapshot,
+                    annotations = emptyList(),
                     layoutState = WLayoutState(), // One-off state for preview
-                    documentCoordinates = null,
+                    rootCoordinates = null,
                     onTextLayout = {},
                     onCommand = {},
-                    forceFullOpacity = true
+                    isBeingDragged = false,
+                    placeholderAlpha = 1f
                 )
             }
         }

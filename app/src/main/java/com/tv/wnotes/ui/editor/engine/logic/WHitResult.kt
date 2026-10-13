@@ -8,7 +8,8 @@ data class WHitResult(
     val characterIndex: Int,
     val lineIndex: Int,
     val affinity: CursorAffinity,
-    val isBelowDocument: Boolean = false
+    val isBelowDocument: Boolean = false,
+    val isOnText: Boolean = true
 )
 
 enum class CursorAffinity {

@@ -6,6 +6,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface AnnotationDao {
+    @Query("SELECT * FROM context_annotations")
+    fun getAllAnnotations(): Flow<List<ContextAnnotation>>
+
     @Query("SELECT * FROM context_annotations WHERE tabId = :tabId")
     fun getAnnotationsForTab(tabId: Long): Flow<List<ContextAnnotation>>
 

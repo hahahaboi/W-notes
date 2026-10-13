@@ -1,6 +1,8 @@
 package com.tv.wnotes.ui.editor.engine.renderer
 
 import androidx.compose.ui.Modifier
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -26,6 +28,7 @@ object WAnnotationConfig {
     val PaddingVertical = 1.dp
     val Opacity = 0.6f
     val DefaultColor = Color.Gray
+    val TitleUnderlineWidth = 2.dp
 }
 
 /**
@@ -41,11 +44,11 @@ object WAnnotationGeometryCalculator {
         layoutResult: TextLayoutResult,
         blockOffset: Offset
     ): AnnotationGeometry? {
-        val start = annotation.startOffset
-        val end = annotation.endOffset
-        
         val textLength = layoutResult.layoutInput.text.length
-        if (start >= end || start < 0 || start >= textLength) {
+        val start = annotation.startOffset.coerceIn(0, textLength)
+        val end = annotation.endOffset.coerceIn(0, textLength)
+        
+        if (start >= end) {
             return null
         }
 
@@ -111,7 +114,7 @@ object WAnnotationGeometryCalculator {
         }
 
         val startCursorRect = layoutResult.getCursorRect(start).translate(blockOffset)
-        val endCursorRect = layoutResult.getCursorRect(safeEnd).translate(blockOffset)
+        val endCursorRect = layoutResult.getCursorRect(end).translate(blockOffset)
 
         return AnnotationGeometry(
             annotationId = annotation.id,
@@ -170,6 +173,24 @@ fun Modifier.drawAnnotationGeometry(
             annotationRectsDraw(this, geometry.lineRects, color, strokeWidth, 4f)
         }
     }
+}
+
+/**
+ * Specifically for titles: draws an underline to indicate context.
+ */
+fun Modifier.drawTitleAnnotationUnderline(
+    hasAnnotation: Boolean,
+    color: Color
+): Modifier = if (!hasAnnotation) this else this.drawBehind {
+    val strokeWidth = WAnnotationConfig.TitleUnderlineWidth.toPx()
+    val y = size.height - strokeWidth
+    drawLine(
+        color = color.copy(alpha = 0.7f),
+        start = Offset(0f, y),
+        end = Offset(size.width, y),
+        strokeWidth = strokeWidth,
+        cap = StrokeCap.Round
+    )
 }
 
 /**

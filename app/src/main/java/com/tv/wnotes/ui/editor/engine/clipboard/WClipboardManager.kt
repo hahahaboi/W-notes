@@ -105,6 +105,28 @@ class WClipboardManager(
 
         sortedRanges.forEachIndexed { rangeIndex, rawRange ->
             val range = WSelectionManager.normalize(rawRange, blocks)
+
+            // Handle Title Selection
+            if (range.anchor.blockId == "W_NOTE_TITLE") {
+                val title = snapshot.document.metadata.title
+                val start = range.anchor.offset.coerceIn(0, title.length)
+                val end = (if (range.focus.blockId == "W_NOTE_TITLE") range.focus.offset else title.length).coerceIn(0, title.length)
+                
+                if (start < end) {
+                    val sliceText = title.substring(start, end)
+                    plainTextBuilder.append(sliceText)
+                    // Note: In this version, title spans aren't supported in clipboard
+                }
+                
+                if (range.focus.blockId == "W_NOTE_TITLE") {
+                    if (rangeIndex < sortedRanges.size - 1) {
+                        plainTextBuilder.append("\n---\n")
+                    }
+                    return@forEachIndexed
+                }
+                plainTextBuilder.append("\n")
+            }
+
             val startIdx = blocks.indexOfFirst { it.id == range.anchor.blockId }
             val endIdx = blocks.indexOfFirst { it.id == range.focus.blockId }
             

@@ -22,7 +22,8 @@ object WMutationEngine {
         target: WSelectionPoint,
         prefix: String = "",
         suffix: String = "",
-        virtualLineCount: Int = 0
+        virtualLineCount: Int = 0,
+        isCopy: Boolean = false
     ): WMutationResult {
         val blocks = snapshot.document.blocks
         
@@ -39,7 +40,7 @@ object WMutationEngine {
             val normalized = WSelectionManager.normalize(range, blocks)
             val (fragment, annotations) = captureFragmentWithAnnotations(snapshot, normalized)
             
-            if (capturedBlocks.isNotEmpty() && capturedBlocks.last() is WTextBlock && fragment.isNotEmpty() && fragment[0] is WTextBlock) {
+            if (capturedBlocks.isNotEmpty() && (capturedBlocks.last() is WTextBlock) && fragment.isNotEmpty() && (fragment[0] is WTextBlock)) {
                 // Merge text blocks with a space
                 val last = capturedBlocks.last() as WTextBlock
                 val first = fragment[0] as WTextBlock
@@ -61,26 +62,29 @@ object WMutationEngine {
             }
         }
 
-        // 3. Delete source ranges in reverse document order
-        val sortedSources = WSelectionManager.normalizeSelectionOrder(sources, blocks).reversed()
+        // 3. Delete source ranges in reverse document order (Skip if copying)
         var currentSnapshot = snapshot
         var adjustedTarget = target
 
-        sortedSources.forEach { range ->
-            val blocksBeforeDelete = currentSnapshot.document.blocks
-            val normalized = WSelectionManager.normalize(range, blocksBeforeDelete)
-            
-            // Adjust target if it's in the same block and after the deleted range
-            if (adjustedTarget.blockId == normalized.anchor.blockId && adjustedTarget.offset > normalized.anchor.offset) {
-                if (normalized.anchor.blockId == normalized.focus.blockId) {
-                    val length = normalized.focus.offset - normalized.anchor.offset
-                    adjustedTarget = adjustedTarget.copy(offset = (adjustedTarget.offset - length).coerceAtLeast(normalized.anchor.offset))
+        if (!isCopy) {
+            val sortedSources = WSelectionManager.normalizeSelectionOrder(sources, blocks).reversed()
+
+            sortedSources.forEach { range ->
+                val blocksBeforeDelete = currentSnapshot.document.blocks
+                val normalized = WSelectionManager.normalize(range, blocksBeforeDelete)
+
+                // Adjust target if it's in the same block and after the deleted range
+                if (adjustedTarget.blockId == normalized.anchor.blockId && adjustedTarget.offset > normalized.anchor.offset) {
+                    if (normalized.anchor.blockId == normalized.focus.blockId) {
+                        val length = normalized.focus.offset - normalized.anchor.offset
+                        adjustedTarget = adjustedTarget.copy(offset = (adjustedTarget.offset - length).coerceAtLeast(normalized.anchor.offset))
+                    }
                 }
-            }
-            
-            val deleteRes = deleteRangeInternal(currentSnapshot, normalized)
-            if (deleteRes is WMutationResult.Success) {
-                currentSnapshot = deleteRes.snapshot
+
+                val deleteRes = deleteRangeInternal(currentSnapshot, normalized)
+                if (deleteRes is WMutationResult.Success) {
+                    currentSnapshot = deleteRes.snapshot
+                }
             }
         }
 
@@ -148,7 +152,7 @@ object WMutationEngine {
         return extractedContent to extractedAnnotations
     }
 
-    private fun insertRichTextAtPoint(
+    fun insertRichTextAtPoint(
         snapshot: WEditorSnapshot, 
         point: WSelectionPoint, 
         text: String,
@@ -182,13 +186,16 @@ object WMutationEngine {
             point.offset,
             text.length
         )
-        
+
         // Add moved annotations
         val finalAnnotations = shiftedAnnotations + newAnns.map { ann ->
             ann.copy(blockId = point.blockId, startOffset = ann.startOffset + point.offset, endOffset = ann.endOffset + point.offset)
         }
 
         val newCursor = WSelectionPoint(point.blockId, point.offset + text.length)
+        val selectionStart = WSelectionPoint(point.blockId, point.offset)
+        val newSelectionRange = WSelectionRange(selectionStart, newCursor)
+
         val newSnapshot = snapshot.copy(
             document = snapshot.document.copy(
                 blocks = blocks.toImmutableList(), 
@@ -197,11 +204,192 @@ object WMutationEngine {
             annotations = finalAnnotations.toImmutableList(),
             markers = shiftedMarkers.toImmutableList(),
             cursor = snapshot.cursor.copy(position = newCursor, blinkVisible = true),
-            selection = WSelectionManager.collapseTo(newCursor),
+            selection = WSelectionState(
+                ranges = listOf(newSelectionRange),
+                activeRangeId = newSelectionRange.id,
+                isActive = true,
+                depth = WSelectionDepth.CHARACTER
+            ),
             activeAnnotationId = null
         )
         
         return WMutationResult.Success(snapshot = newSnapshot, mutationType = WMutationType.MOVE_RANGE, affectedBlockIds = setOf(point.blockId), affectedCharacterCount = text.length)
+    }
+
+    fun applyFontSize(snapshot: WEditorSnapshot, size: Int): WMutationResult {
+        if (!snapshot.selection.isActive || snapshot.selection.ranges.isEmpty() || WSelectionManager.isCollapsed(snapshot.selection)) {
+            // Update default font size for the note
+            val nextSnapshot = snapshot.copy(
+                settings = snapshot.settings.copy(fontSize = size)
+            )
+            return WMutationResult.Success(
+                snapshot = nextSnapshot,
+                mutationType = WMutationType.FORMAT_SELECTION,
+                affectedBlockIds = emptySet(),
+                affectedCharacterCount = 0
+            )
+        }
+
+        var currentSnapshot = snapshot
+        val affectedIds = mutableSetOf<String>()
+
+        snapshot.selection.ranges.forEach { range ->
+            val normalized = WSelectionManager.normalize(range, snapshot.document.blocks)
+            val blocks = currentSnapshot.document.blocks.toMutableList()
+            
+            val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+            val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+            
+            if (startIdx != -1 && endIdx != -1) {
+                for (i in startIdx..endIdx) {
+                    val block = blocks[i]
+                    if (block !is WTextContainer) continue
+
+                    val start = if (i == startIdx) normalized.anchor.offset else 0
+                    val end = if (i == endIdx) normalized.focus.offset else block.text.length
+                    
+                    if (start < end) {
+                        // Remove existing FontSize spans in this range first
+                        val cleanedSpans = block.spans.filterNot { 
+                            it.type == SpanType.FontSize && 
+                            it.start < end && it.end > start 
+                        }
+                        
+                        val newSpan = WTextSpan(start, end, SpanType.FontSize, mapOf("size" to size.toString()))
+                        val newSpans = (cleanedSpans + newSpan).toImmutableList()
+                        blocks[i] = block.copyWithText(block.text, newSpans)
+                        affectedIds.add(block.id)
+                    }
+                }
+                currentSnapshot = currentSnapshot.copy(
+                    document = currentSnapshot.document.copy(
+                        blocks = blocks.toImmutableList(),
+                        revision = currentSnapshot.document.revision + 1
+                    )
+                )
+            }
+        }
+
+        return WMutationResult.Success(
+            snapshot = currentSnapshot,
+            mutationType = WMutationType.FORMAT_SELECTION,
+            affectedBlockIds = affectedIds,
+            affectedCharacterCount = 0
+        )
+    }
+
+    fun adjustFontSize(snapshot: WEditorSnapshot, delta: Int): WMutationResult {
+        if (!snapshot.selection.isActive || snapshot.selection.ranges.isEmpty()) {
+            val newSize = (snapshot.settings.fontSize + delta).coerceIn(6, 64)
+            val nextSnapshot = snapshot.copy(
+                settings = snapshot.settings.copy(fontSize = newSize)
+            )
+            return WMutationResult.Success(
+                snapshot = nextSnapshot,
+                mutationType = WMutationType.FORMAT_SELECTION,
+                affectedBlockIds = emptySet(),
+                affectedCharacterCount = 0
+            )
+        }
+
+        var currentSnapshot = snapshot
+        val affectedIds = mutableSetOf<String>()
+
+        snapshot.selection.ranges.forEach { range ->
+            val normalized = WSelectionManager.normalize(range, snapshot.document.blocks)
+            val blocks = currentSnapshot.document.blocks.toMutableList()
+
+            val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+            val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+
+            if (startIdx != -1 && endIdx != -1) {
+                for (i in startIdx..endIdx) {
+                    val block = blocks[i]
+                    if (block !is WTextContainer) continue
+
+                    val start = if (i == startIdx) normalized.anchor.offset else 0
+                    val end = if (i == endIdx) normalized.focus.offset else block.text.length
+
+                    if (start < end) {
+                        // We need to find all FontSize spans that intersect with this range
+                        // and adjust them. If parts of the range have no FontSize span,
+                        // we use the default from settings.
+                        
+                        val rangeSpans = block.spans.filter { it.type == SpanType.FontSize && it.start < end && it.end > start }
+                        val newSpans = block.spans.toMutableList()
+                        
+                        if (rangeSpans.isEmpty()) {
+                            // No explicit font size spans, apply one based on settings
+                            val baseSize = snapshot.settings.fontSize
+                            val newSize = (baseSize + delta).coerceIn(6, 64)
+                            newSpans.add(WTextSpan(start, end, SpanType.FontSize, mapOf("size" to newSize.toString())))
+                        } else {
+                            // Adjust existing spans and fill gaps
+                            var lastProcessed = start
+                            val sortedSpans = rangeSpans.sortedBy { it.start }
+                            
+                            val spansToAdd = mutableListOf<WTextSpan>()
+                            val spansToRemove = mutableSetOf<WTextSpan>()
+                            
+                            sortedSpans.forEach { span ->
+                                // Gap before this span
+                                if (span.start > lastProcessed) {
+                                    val baseSize = snapshot.settings.fontSize
+                                    val newSize = (baseSize + delta).coerceIn(6, 64)
+                                    spansToAdd.add(WTextSpan(lastProcessed, span.start, SpanType.FontSize, mapOf("size" to newSize.toString())))
+                                }
+                                
+                                // Adjust this span (might need to split if it extends beyond range)
+                                val actualStart = maxOf(span.start, start)
+                                val actualEnd = minOf(span.end, end)
+                                
+                                val currentSize = span.attributes["size"]?.toIntOrNull() ?: snapshot.settings.fontSize
+                                val newSize = (currentSize + delta).coerceIn(6, 64)
+                                
+                                spansToRemove.add(span)
+                                spansToAdd.add(WTextSpan(actualStart, actualEnd, SpanType.FontSize, mapOf("size" to newSize.toString())))
+                                
+                                // Re-add fragments of the original span if it was clipped
+                                if (span.start < start) {
+                                    spansToAdd.add(span.copy(end = start))
+                                }
+                                if (span.end > end) {
+                                    spansToAdd.add(span.copy(start = end))
+                                }
+                                
+                                lastProcessed = actualEnd
+                            }
+                            
+                            // Gap after last span
+                            if (lastProcessed < end) {
+                                val baseSize = snapshot.settings.fontSize
+                                val newSize = (baseSize + delta).coerceIn(6, 64)
+                                spansToAdd.add(WTextSpan(lastProcessed, end, SpanType.FontSize, mapOf("size" to newSize.toString())))
+                            }
+                            
+                            newSpans.removeAll(spansToRemove)
+                            newSpans.addAll(spansToAdd)
+                        }
+                        
+                        blocks[i] = block.copyWithText(block.text, newSpans.toImmutableList())
+                        affectedIds.add(block.id)
+                    }
+                }
+                currentSnapshot = currentSnapshot.copy(
+                    document = currentSnapshot.document.copy(
+                        blocks = blocks.toImmutableList(),
+                        revision = currentSnapshot.document.revision + 1
+                    )
+                )
+            }
+        }
+
+        return WMutationResult.Success(
+            snapshot = currentSnapshot,
+            mutationType = WMutationType.FORMAT_SELECTION,
+            affectedBlockIds = affectedIds,
+            affectedCharacterCount = 0
+        )
     }
 
     fun insertText(snapshot: WEditorSnapshot, text: String): WMutationResult {
@@ -320,16 +508,31 @@ object WMutationEngine {
         }
         
         val cursor = snapshot.cursor.position
-        if (cursor.offset > 0) {
-            val blocks = snapshot.document.blocks.toMutableList()
-            val index = blocks.indexOfFirst { it.id == cursor.blockId }
-            val block = blocks[index]
-            if (block !is WTextContainer) return WMutationResult.Failure("Invalid block", WMutationType.DELETE_RANGE)
+        val blocks = snapshot.document.blocks
+        val index = blocks.indexOfFirst { it.id == cursor.blockId }
+        if (index == -1) return WMutationResult.Failure("Invalid cursor", WMutationType.DELETE_RANGE)
+        val block = blocks[index]
 
-            val newText = StringBuilder(block.text).deleteAt(cursor.offset - 1).toString()
-            val newSpans = WSpanManager.shiftSpansForDeletion(block.spans, cursor.offset - 1, cursor.offset)
+        // Backspace on empty list item exits list
+        if (cursor.offset == 0 && block is WTextContainer && block.text.isEmpty()) {
+            val isListItem = when (block) {
+                is WChecklistBlock -> true
+                is WTextBlock -> block.type == TextBlockType.Bullet || block.type == TextBlockType.Numbered
+                else -> false
+            }
+            if (isListItem) {
+                return toggleBlockType(snapshot, if (block is WChecklistBlock) TextBlockType.Checklist else (block as WTextBlock).type)
+            }
+        }
+
+        if (cursor.offset > 0) {
+            val mutableBlocks = blocks.toMutableList()
+            val textBlock = block as WTextContainer
+
+            val newText = StringBuilder(textBlock.text).deleteAt(cursor.offset - 1).toString()
+            val newSpans = WSpanManager.shiftSpansForDeletion(textBlock.spans, cursor.offset - 1, cursor.offset)
             
-            blocks[index] = block.copyWithText(newText, newSpans)
+            mutableBlocks[index] = textBlock.copyWithText(newText, newSpans)
 
             val newAnnotations = WAnnotationManager.shiftAnnotationsForDeletion(
                 snapshot.annotations,
@@ -349,7 +552,7 @@ object WMutationEngine {
             val newPoint = cursor.copy(offset = cursor.offset - 1)
             val nextSnapshot = snapshot.copy(
                 document = snapshot.document.copy(
-                    blocks = blocks.toImmutableList(), 
+                    blocks = mutableBlocks.toImmutableList(), 
                     revision = snapshot.document.revision + 1
                 ),
                 annotations = newAnnotations.toImmutableList(),
@@ -457,7 +660,7 @@ object WMutationEngine {
             cursor.offset + 1,
             snapshot.document.blocks
         )
-        
+
         val nextSnapshot = snapshot.copy(
             document = snapshot.document.copy(
                 blocks = blocks.toImmutableList(), 
@@ -476,52 +679,98 @@ object WMutationEngine {
         )
     }
 
+    /**
+     * Toggles an inline style. With a selection it styles the selection (or removes the style if the
+     * whole selection already has it); with just a cursor it does the same for the word under the cursor.
+     */
     fun applySpanToSelection(snapshot: WEditorSnapshot, spanType: SpanType): WMutationResult {
-        if (!snapshot.selection.isActive || snapshot.selection.ranges.isEmpty()) {
-            return WMutationResult.Failure("No selection", WMutationType.FORMAT_SELECTION)
+        val blocks = snapshot.document.blocks
+        val segments = selectedSegments(snapshot)
+            ?: wordAtCursor(snapshot)?.let { listOf(it) }
+            ?: return WMutationResult.Failure("No selection", WMutationType.FORMAT_SELECTION)
+
+        val alreadyStyled = segments.all { (blockId, start, end) ->
+            val block = blocks.find { it.id == blockId } as? WTextContainer ?: return@all true
+            isFullyCovered(block.spans, spanType, start, end)
         }
 
-        var currentSnapshot = snapshot
+        val newBlocks = blocks.toMutableList()
         val affectedIds = mutableSetOf<String>()
-
-        snapshot.selection.ranges.forEach { range ->
-            val normalized = WSelectionManager.normalize(range, snapshot.document.blocks)
-            val blocks = currentSnapshot.document.blocks.toMutableList()
-            
-            val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
-            val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
-            
-            if (startIdx != -1 && endIdx != -1) {
-                for (i in startIdx..endIdx) {
-                    val block = blocks[i]
-                    if (block !is WTextContainer) continue
-
-                    val start = if (i == startIdx) normalized.anchor.offset else 0
-                    val end = if (i == endIdx) normalized.focus.offset else block.text.length
-                    
-                    if (start < end) {
-                        val newSpan = WTextSpan(start, end, spanType)
-                        val newSpans = (block.spans + newSpan).toImmutableList()
-                        blocks[i] = block.copyWithText(block.text, newSpans)
-                        affectedIds.add(block.id)
-                    }
-                }
-                currentSnapshot = currentSnapshot.copy(
-                    document = currentSnapshot.document.copy(
-                        blocks = blocks.toImmutableList(),
-                        revision = currentSnapshot.document.revision + 1
-                    )
-                )
-            }
+        segments.forEach { (blockId, start, end) ->
+            val index = newBlocks.indexOfFirst { it.id == blockId }
+            val block = newBlocks.getOrNull(index) as? WTextContainer ?: return@forEach
+            val remaining = removeSpanRange(block.spans, spanType, start, end)
+            val newSpans = if (alreadyStyled) remaining else remaining + WTextSpan(start, end, spanType)
+            newBlocks[index] = block.copyWithText(block.text, newSpans.toImmutableList())
+            affectedIds.add(blockId)
         }
 
         return WMutationResult.Success(
-            snapshot = currentSnapshot,
+            snapshot = snapshot.copy(
+                document = snapshot.document.copy(
+                    blocks = newBlocks.toImmutableList(),
+                    revision = snapshot.document.revision + 1
+                )
+            ),
             mutationType = WMutationType.FORMAT_SELECTION,
             affectedBlockIds = affectedIds,
             affectedCharacterCount = 0
         )
     }
+
+    /** Non-empty (blockId, start, end) pieces of the active selection, or null if nothing is selected. */
+    private fun selectedSegments(snapshot: WEditorSnapshot): List<Triple<String, Int, Int>>? {
+        val selection = snapshot.selection
+        if (!selection.isActive || selection.ranges.isEmpty() || WSelectionManager.isCollapsed(selection)) return null
+        val blocks = snapshot.document.blocks
+        val segments = mutableListOf<Triple<String, Int, Int>>()
+        selection.ranges.forEach { range ->
+            val normalized = WSelectionManager.normalize(range, blocks)
+            val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+            val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+            if (startIdx == -1 || endIdx == -1) return@forEach
+            for (i in startIdx..endIdx) {
+                val block = blocks[i] as? WTextContainer ?: continue
+                val start = if (i == startIdx) normalized.anchor.offset else 0
+                val end = if (i == endIdx) normalized.focus.offset else block.text.length
+                if (start < end) segments.add(Triple(blocks[i].id, start, end))
+            }
+        }
+        return segments.ifEmpty { null }
+    }
+
+    private fun wordAtCursor(snapshot: WEditorSnapshot): Triple<String, Int, Int>? {
+        val point = snapshot.cursor.position
+        val block = snapshot.document.blocks.find { it.id == point.blockId } as? WTextContainer ?: return null
+        val text = block.text
+        val offset = point.offset.coerceIn(0, text.length)
+        var start = offset
+        var end = offset
+        while (start > 0 && text[start - 1].isLetterOrDigit()) start--
+        while (end < text.length && text[end].isLetterOrDigit()) end++
+        return if (start < end) Triple(point.blockId, start, end) else null
+    }
+
+    private fun isFullyCovered(spans: List<WTextSpan>, type: SpanType, start: Int, end: Int): Boolean {
+        var covered = start
+        spans.filter { it.type == type }.sortedBy { it.start }.forEach { span ->
+            if (span.start <= covered && span.end > covered) covered = span.end
+        }
+        return covered >= end
+    }
+
+    /** Removes [type] from [start, end), splitting spans that stick out on either side. */
+    private fun removeSpanRange(spans: List<WTextSpan>, type: SpanType, start: Int, end: Int): List<WTextSpan> =
+        spans.flatMap { span ->
+            if (span.type != type || span.end <= start || span.start >= end) {
+                listOf(span)
+            } else {
+                listOfNotNull(
+                    span.copy(end = start).takeIf { it.start < it.end },
+                    span.copy(start = end).takeIf { it.start < it.end }
+                )
+            }
+        }
 
     fun insertBlock(snapshot: WEditorSnapshot, block: WBlock, index: Int? = null): WMutationResult {
         val blocks = snapshot.document.blocks.toMutableList()
@@ -560,6 +809,163 @@ object WMutationEngine {
             affectedBlockIds = setOf(updatedBlock.id),
             affectedCharacterCount = 0
         )
+    }
+
+    fun toggleBlockType(snapshot: WEditorSnapshot, targetType: TextBlockType): WMutationResult {
+        val selection = snapshot.selection
+        val cursor = snapshot.cursor.position
+        val blocks = snapshot.document.blocks.toMutableList()
+        val affectedIds = mutableSetOf<String>()
+
+        val rangeToToggle = if (selection.isActive && !WSelectionManager.isCollapsed(selection)) {
+            val normalized = WSelectionManager.normalize(selection.ranges.first(), blocks)
+            val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+            val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+            startIdx..endIdx
+        } else {
+            val idx = blocks.indexOfFirst { it.id == cursor.blockId }
+            if (idx != -1) idx..idx else return WMutationResult.Failure("No block found", WMutationType.FORMAT_SELECTION)
+        }
+
+        rangeToToggle.forEach { i ->
+            val block = blocks[i]
+            val newBlock = when (block) {
+                is WTextBlock -> {
+                    when (targetType) {
+                        TextBlockType.Checklist -> {
+                            WChecklistBlock(
+                                id = block.id,
+                                text = block.text,
+                                spans = block.spans,
+                                style = block.style,
+                                parentBlockId = block.parentBlockId
+                            )
+                        }
+                        else -> {
+                            block.copy(type = if (block.type == targetType) TextBlockType.Body else targetType)
+                        }
+                    }
+                }
+                is WChecklistBlock -> {
+                    if (targetType == TextBlockType.Checklist) {
+                        WTextBlock(
+                            id = block.id,
+                            text = block.text,
+                            spans = block.spans,
+                            style = block.style,
+                            parentBlockId = block.parentBlockId,
+                            type = TextBlockType.Body
+                        )
+                    } else {
+                        WTextBlock(
+                            id = block.id,
+                            text = block.text,
+                            spans = block.spans,
+                            style = block.style,
+                            parentBlockId = block.parentBlockId,
+                            type = targetType
+                        )
+                    }
+                }
+                else -> block
+            }
+            blocks[i] = newBlock
+            affectedIds.add(block.id)
+        }
+
+        val newSnapshot = snapshot.copy(
+            document = snapshot.document.copy(
+                blocks = blocks.toImmutableList(),
+                revision = snapshot.document.revision + 1
+            )
+        )
+
+        return WMutationResult.Success(
+            snapshot = newSnapshot,
+            mutationType = WMutationType.FORMAT_SELECTION,
+            affectedBlockIds = affectedIds,
+            affectedCharacterCount = 0
+        )
+    }
+
+    fun adjustIndent(snapshot: WEditorSnapshot, delta: Int): WMutationResult {
+        val selection = snapshot.selection
+        val cursor = snapshot.cursor.position
+        val blocks = snapshot.document.blocks.toMutableList()
+        val affectedIds = mutableSetOf<String>()
+
+        val rangeToAdjust = if (selection.isActive && !WSelectionManager.isCollapsed(selection)) {
+            val normalized = WSelectionManager.normalize(selection.ranges.first(), blocks)
+            val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+            val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+            startIdx..endIdx
+        } else {
+            val idx = blocks.indexOfFirst { it.id == cursor.blockId }
+            if (idx != -1) idx..idx else return WMutationResult.Failure("No block found", WMutationType.FORMAT_SELECTION)
+        }
+
+        rangeToAdjust.forEach { i ->
+            val block = blocks[i]
+            val newStyle = block.style.copy(indentationLevel = (block.style.indentationLevel + delta).coerceAtLeast(0))
+            val newBlock = when (block) {
+                is WTextBlock -> block.copy(style = newStyle)
+                is WChecklistBlock -> block.copy(style = newStyle)
+                is WMediaBlock -> block.copy(style = newStyle)
+                is WDrawingBlock -> block.copy(style = newStyle)
+                is WTextBoxBlock -> block.copy(style = newStyle)
+            }
+            blocks[i] = newBlock
+            affectedIds.add(block.id)
+        }
+
+        val newSnapshot = snapshot.copy(
+            document = snapshot.document.copy(
+                blocks = blocks.toImmutableList(),
+                revision = snapshot.document.revision + 1
+            )
+        )
+
+        return WMutationResult.Success(newSnapshot, WMutationType.FORMAT_SELECTION, affectedIds, 0)
+    }
+
+    fun setAlignment(snapshot: WEditorSnapshot, alignment: String): WMutationResult {
+        val selection = snapshot.selection
+        val cursor = snapshot.cursor.position
+        val blocks = snapshot.document.blocks.toMutableList()
+        val affectedIds = mutableSetOf<String>()
+
+        val rangeToAdjust = if (selection.isActive && !WSelectionManager.isCollapsed(selection)) {
+            val normalized = WSelectionManager.normalize(selection.ranges.first(), blocks)
+            val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+            val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+            startIdx..endIdx
+        } else {
+            val idx = blocks.indexOfFirst { it.id == cursor.blockId }
+            if (idx != -1) idx..idx else return WMutationResult.Failure("No block found", WMutationType.FORMAT_SELECTION)
+        }
+
+        rangeToAdjust.forEach { i ->
+            val block = blocks[i]
+            val newStyle = block.style.copy(alignment = alignment)
+            val newBlock = when (block) {
+                is WTextBlock -> block.copy(style = newStyle)
+                is WChecklistBlock -> block.copy(style = newStyle)
+                is WMediaBlock -> block.copy(style = newStyle)
+                is WDrawingBlock -> block.copy(style = newStyle)
+                is WTextBoxBlock -> block.copy(style = newStyle)
+            }
+            blocks[i] = newBlock
+            affectedIds.add(block.id)
+        }
+
+        val newSnapshot = snapshot.copy(
+            document = snapshot.document.copy(
+                blocks = blocks.toImmutableList(),
+                revision = snapshot.document.revision + 1
+            )
+        )
+
+        return WMutationResult.Success(newSnapshot, WMutationType.FORMAT_SELECTION, affectedIds, 0)
     }
 
     fun deleteSelection(snapshot: WEditorSnapshot): WMutationResult {
@@ -729,6 +1135,17 @@ object WMutationEngine {
         val block = blocks[index]
         if (block !is WTextContainer) return WMutationResult.Failure("Invalid block", WMutationType.SPLIT_BLOCK)
 
+        // If block is a list item and is empty, Enter should exit the list
+        val isListItem = when (block) {
+            is WChecklistBlock -> true
+            is WTextBlock -> block.type == TextBlockType.Bullet || block.type == TextBlockType.Numbered
+            else -> false
+        }
+
+        if (isListItem && block.text.isEmpty()) {
+            return toggleBlockType(snapshot, if (block is WChecklistBlock) TextBlockType.Checklist else (block as WTextBlock).type)
+        }
+
         val headText = block.text.substring(0, cursor.offset)
         val tailText = block.text.substring(cursor.offset)
         
@@ -737,13 +1154,25 @@ object WMutationEngine {
         val updatedHead = block.copyWithText(headText, headSpans)
         
         val newTailId = UUID.randomUUID().toString()
-        val newTail = WTextBlock(
-            id = newTailId,
-            text = tailText,
-            spans = tailSpans,
-            type = if (block is WTextBlock) block.type else TextBlockType.Body,
-            parentBlockId = block.parentBlockId
-        )
+        val newTail = when (block) {
+            is WChecklistBlock -> WChecklistBlock(
+                id = newTailId,
+                text = tailText,
+                spans = tailSpans,
+                style = block.style,
+                parentBlockId = block.parentBlockId,
+                isChecked = false
+            )
+            is WTextBlock -> WTextBlock(
+                id = newTailId,
+                text = tailText,
+                spans = tailSpans,
+                type = block.type,
+                style = block.style,
+                parentBlockId = block.parentBlockId
+            )
+            else -> WTextBlock(id = newTailId, text = tailText, spans = tailSpans)
+        }
 
         blocks[index] = updatedHead
         blocks.add(index + 1, newTail)
@@ -813,6 +1242,116 @@ object WMutationEngine {
         )
     }
 
+    fun applyFont(snapshot: WEditorSnapshot, fontFamily: String): WMutationResult {
+        if (!snapshot.selection.isActive || snapshot.selection.ranges.isEmpty() || WSelectionManager.isCollapsed(snapshot.selection)) {
+            // Nothing selected: change the default font for the whole note
+            return WMutationResult.Success(
+                snapshot = snapshot.copy(settings = snapshot.settings.copy(fontFamily = fontFamily)),
+                mutationType = WMutationType.FORMAT_SELECTION,
+                affectedBlockIds = emptySet(),
+                affectedCharacterCount = 0
+            )
+        }
+
+        var currentSnapshot = snapshot
+        val affectedIds = mutableSetOf<String>()
+
+        snapshot.selection.ranges.forEach { range ->
+            val normalized = WSelectionManager.normalize(range, snapshot.document.blocks)
+            val blocks = currentSnapshot.document.blocks.toMutableList()
+            
+            val startIdx = blocks.indexOfFirst { it.id == normalized.anchor.blockId }
+            val endIdx = blocks.indexOfFirst { it.id == normalized.focus.blockId }
+            
+            if (startIdx != -1 && endIdx != -1) {
+                for (i in startIdx..endIdx) {
+                    val block = blocks[i]
+                    if (block !is WTextContainer) continue
+
+                    val start = if (i == startIdx) normalized.anchor.offset else 0
+                    val end = if (i == endIdx) normalized.focus.offset else block.text.length
+                    
+                    if (start < end) {
+                        val cleanedSpans = block.spans.filterNot { 
+                            it.type == SpanType.FontFamily && it.start < end && it.end > start 
+                        }
+                        val newSpan = WTextSpan(start, end, SpanType.FontFamily, mapOf("family" to fontFamily))
+                        val newSpans = (cleanedSpans + newSpan).toImmutableList()
+                        blocks[i] = block.copyWithText(block.text, newSpans)
+                        affectedIds.add(block.id)
+                    }
+                }
+                currentSnapshot = currentSnapshot.copy(
+                    document = currentSnapshot.document.copy(
+                        blocks = blocks.toImmutableList(),
+                        revision = currentSnapshot.document.revision + 1
+                    )
+                )
+            }
+        }
+
+        return WMutationResult.Success(currentSnapshot, WMutationType.FORMAT_SELECTION, affectedIds, 0)
+    }
+
+    fun addTextBox(snapshot: WEditorSnapshot): WMutationResult {
+        val newId = UUID.randomUUID().toString()
+        val newBlock = WTextBoxBlock(id = newId, style = WBlockStyle(isFloating = false))
+        val result = insertBlock(snapshot, newBlock)
+        if (result !is WMutationResult.Success) return result
+        // Put the cursor inside the new box so the user can type straight away.
+        val point = WSelectionPoint(newId, 0)
+        return result.copy(
+            snapshot = result.snapshot.copy(
+                cursor = WCursorState(position = point),
+                selection = WSelectionManager.collapseTo(point)
+            )
+        )
+    }
+
+    /** Adds an empty drawing area after the cursor's block, unless one is already there. */
+    fun ensureDrawingBlock(snapshot: WEditorSnapshot): WMutationResult {
+        val blocks = snapshot.document.blocks
+        val cursorIdx = blocks.indexOfFirst { it.id == snapshot.cursor.position.blockId }
+        val nearby = listOfNotNull(blocks.getOrNull(cursorIdx), blocks.getOrNull(cursorIdx + 1))
+        if (nearby.any { it is WDrawingBlock }) {
+            return WMutationResult.Failure("Drawing area already present", WMutationType.INSERT_BLOCK)
+        }
+        return insertBlock(snapshot, WDrawingBlock(id = UUID.randomUUID().toString()))
+    }
+
+    fun updateTitle(snapshot: WEditorSnapshot, newTitle: String, cursorOffset: Int? = null): WMutationResult {
+        val oldTitle = snapshot.document.metadata.title
+        if (oldTitle == newTitle && (cursorOffset == null || snapshot.cursor.position.offset == cursorOffset)) {
+            return WMutationResult.Success(snapshot, WMutationType.UPDATE_BLOCK, emptySet(), 0)
+        }
+        
+        val updatedDocument = snapshot.document.copy(
+            metadata = snapshot.document.metadata.copy(title = newTitle),
+            revision = snapshot.document.revision + 1
+        )
+        
+        // verifyAndRelocate handles drift by searching for anchor text
+        val titleBlock = WTextBlock(id = "W_NOTE_TITLE", text = newTitle)
+        val nextAnnotations = WAnnotationManager.verifyAndRelocate(snapshot.annotations, listOf(titleBlock))
+        
+        var nextCursor = snapshot.cursor
+        if (cursorOffset != null) {
+            nextCursor = nextCursor.copy(
+                position = WSelectionPoint("W_NOTE_TITLE", cursorOffset),
+                blinkVisible = true
+            )
+        }
+        
+        val nextSnapshot = snapshot.copy(
+            document = updatedDocument,
+            annotations = nextAnnotations.toImmutableList(),
+            cursor = nextCursor,
+            selection = if (cursorOffset != null) WSelectionManager.collapseTo(nextCursor.position) else snapshot.selection
+        )
+        
+        return WMutationResult.Success(nextSnapshot, WMutationType.UPDATE_BLOCK, setOf("W_NOTE_TITLE"), 0)
+    }
+
     fun annotateRange(snapshot: WEditorSnapshot, content: String, range: WSelectionRange, anchorText: String): WMutationResult {
         if (content.isBlank()) return WMutationResult.Failure("Annotation content cannot be empty", WMutationType.ANNOTATE_RANGE)
         
@@ -821,8 +1360,10 @@ object WMutationEngine {
             return WMutationResult.Failure("Annotations currently only support a single block", WMutationType.ANNOTATE_RANGE)
         }
 
-        val block = snapshot.document.blocks.find { it.id == normalized.anchor.blockId } ?: return WMutationResult.Failure("Block not found", WMutationType.ANNOTATE_RANGE)
-        if (block !is WTextContainer) return WMutationResult.Failure("Selected block is not a text container", WMutationType.ANNOTATE_RANGE)
+        if (normalized.anchor.blockId != "W_NOTE_TITLE") {
+            val block = snapshot.document.blocks.find { it.id == normalized.anchor.blockId } ?: return WMutationResult.Failure("Block not found", WMutationType.ANNOTATE_RANGE)
+            if (block !is WTextContainer) return WMutationResult.Failure("Selected block is not a text container", WMutationType.ANNOTATE_RANGE)
+        }
 
         if (normalized.anchor.offset == normalized.focus.offset) {
             return WMutationResult.Failure("Cannot annotate an empty range", WMutationType.ANNOTATE_RANGE)
@@ -927,4 +1468,28 @@ object WMutationEngine {
         val nextSnapshot = snapshot.copy(markers = newMarkers.toImmutableList())
         return WMutationResult.Success(nextSnapshot, WMutationType.DELETE_ANNOTATION, emptySet(), 0)
     }
+
+    // --- Tab Tie Methods ---
+
+    fun createTie(snapshot: WEditorSnapshot, destinationTabId: Long, range: WSelectionRange, anchorText: String): WMutationResult {
+        val normalized = WSelectionManager.normalize(range, snapshot.document.blocks)
+        val tie = com.tv.wnotes.ui.editor.engine.state.TabTie(
+            sourceTabId = snapshot.document.id.toLongOrNull() ?: -1L,
+            destinationTabId = destinationTabId,
+            sourceBlockId = normalized.anchor.blockId,
+            sourceStartOffset = normalized.anchor.offset,
+            sourceEndOffset = normalized.focus.offset,
+            destinationBlockId = "", 
+            destinationStartOffset = 0,
+            anchorText = anchorText
+        )
+        val nextSnapshot = snapshot.copy(
+            ties = (snapshot.ties + tie).toImmutableList(),
+            isTyingTabs = false,
+            selection = WSelectionManager.collapseTo(normalized.focus),
+            cursor = snapshot.cursor.copy(position = normalized.focus, isVisible = true)
+        )
+        return WMutationResult.Success(nextSnapshot, WMutationType.ANNOTATE_RANGE, emptySet(), 0)
+    }
+
 }

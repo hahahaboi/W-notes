@@ -71,6 +71,9 @@ dependencies {
     // Image Loading
     implementation(libs.coil.compose)
 
+    // Gson
+    implementation(libs.gson)
+
     testImplementation(libs.junit)
 
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -6,6 +6,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface NoteTabDao {
+    @Query("SELECT * FROM note_tabs")
+    fun getAllTabs(): Flow<List<NoteTab>>
+
     @Query("SELECT * FROM note_tabs WHERE noteId = :noteId ORDER BY orderIndex ASC")
     fun getTabsForNote(noteId: Long): Flow<List<NoteTab>>
 

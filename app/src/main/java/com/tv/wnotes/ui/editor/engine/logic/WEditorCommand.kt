@@ -36,11 +36,26 @@ sealed interface WEditorCommand {
     data class ActivateSelection(val rangeId: String) : WEditorCommand
     data class RemoveSelectionRange(val rangeId: String) : WEditorCommand
     data class SetSelectionInteraction(val mode: com.tv.wnotes.ui.editor.engine.state.WSelectionInteraction) : WEditorCommand
+    data class SetSelection(val selection: com.tv.wnotes.ui.editor.engine.state.WSelectionState) : WEditorCommand
     data class ApplySpan(val spanType: com.tv.wnotes.ui.editor.engine.model.SpanType) : WEditorCommand
 
-    // Block Management
     data class InsertBlock(val block: com.tv.wnotes.ui.editor.engine.model.WBlock, val index: Int? = null) : WEditorCommand
     data class UpdateBlock(val block: com.tv.wnotes.ui.editor.engine.model.WBlock) : WEditorCommand
+    data class ToggleBlockType(val type: com.tv.wnotes.ui.editor.engine.model.TextBlockType) : WEditorCommand
+    data object IncreaseIndent : WEditorCommand
+    data object DecreaseIndent : WEditorCommand
+    data class SetAlignment(val alignment: String) : WEditorCommand
+    data class SetFontSize(val size: Int) : WEditorCommand
+    data class AdjustFontSize(val delta: Int) : WEditorCommand
+    data class ApplyFont(val fontFamily: String) : WEditorCommand
+
+    data class UpdateTitle(val title: String, val cursorOffset: Int? = null) : WEditorCommand
+    data object Undo : WEditorCommand
+    data object Redo : WEditorCommand
+    data object AIAssist : WEditorCommand
+    data object AddTextBox : WEditorCommand
+    data class SetDrawingMode(val active: Boolean) : WEditorCommand
+    data object ActivateNormalText : WEditorCommand
 
     data object ClearSelection : WEditorCommand
     data object ClearSelectionAndHideCursor : WEditorCommand
@@ -48,7 +63,6 @@ sealed interface WEditorCommand {
     data object Copy : WEditorCommand
     data object Cut : WEditorCommand
     data object Paste : WEditorCommand
-    data object MakeTabFromSelection : WEditorCommand
     
     // Keyboard Actions
     data object SplitBlock : WEditorCommand
@@ -67,6 +81,9 @@ sealed interface WEditorCommand {
     data class StartCreatingAnnotation(val range: WSelectionRange, val anchorText: String) : WEditorCommand
     data object CancelCreatingAnnotation : WEditorCommand
 
+    data class SetNavigationHighlight(val range: WSelectionRange?) : WEditorCommand
+    data class SetSearchHighlights(val ranges: List<WSelectionRange>, val activeRange: WSelectionRange?) : WEditorCommand
+
     // Text Markers
     data object ToggleMarkerSidebar : WEditorCommand
     data class CreateMarker(val label: String, val range: WSelectionRange, val anchorText: String) : WEditorCommand
@@ -79,8 +96,27 @@ sealed interface WEditorCommand {
     data object OpenQuickJump : WEditorCommand
     data object CloseQuickJump : WEditorCommand
 
+    // Tab Ties
+    data object StartTieTabs : WEditorCommand
+    data object CancelTieTabs : WEditorCommand
+    data class PlaceTabTie(val destinationTabId: Long, val range: WSelectionRange, val anchorText: String) : WEditorCommand
+    data class ShowTabTieDestinations(val tieIds: Set<String>) : WEditorCommand
+    data class JumpToTabTie(val tieId: String) : WEditorCommand
+
+    data object MakeTabFromSelection : WEditorCommand
+    data class CreateTabWithSelection(val selectedBlocks: List<com.tv.wnotes.ui.editor.engine.model.WBlock>) : WEditorCommand
+    data class AddToTab(val selectedBlocks: List<com.tv.wnotes.ui.editor.engine.model.WBlock>) : WEditorCommand
+
     // Telemetry
     data class UpdateTelemetry(val transform: (com.tv.wnotes.ui.editor.engine.state.WTelemetryState) -> com.tv.wnotes.ui.editor.engine.state.WTelemetryState) : WEditorCommand
+
+    // Zoom
+    data class UpdateZoom(val zoom: Float) : WEditorCommand
+
+    // Goal
+    data class SetGoal(val point: WSelectionPoint) : WEditorCommand
+    data class MoveGoal(val point: WSelectionPoint) : WEditorCommand
+    object RemoveGoal : WEditorCommand
 }
 
 enum class NavigationDirection {

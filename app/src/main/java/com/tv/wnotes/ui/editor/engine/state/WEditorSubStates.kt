@@ -16,7 +16,7 @@ data class WSelectionState(
     val composingRange: WSelectionRange? = null,
     val startHandle: WSelectionHandleState = WSelectionHandleState(WSelectionHandleType.START),
     val endHandle: WSelectionHandleState = WSelectionHandleState(WSelectionHandleType.END),
-    val activeHandle: WSelectionHandleType? = null
+    val activeHandle: WSelectionHandleType? = null,
 )
 
 enum class WSelectionInteraction {
@@ -39,6 +39,20 @@ data class WSelectionRange(
 )
 
 @Immutable
+data class TabTie(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val sourceTabId: Long,
+    val destinationTabId: Long,
+    val sourceBlockId: String,
+    val sourceStartOffset: Int,
+    val sourceEndOffset: Int,
+    val destinationBlockId: String,
+    val destinationStartOffset: Int,
+    val anchorText: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Immutable
 data class WSelectionPoint(
     val blockId: String,
     val offset: Int
@@ -55,6 +69,7 @@ data class WCursorState(
 
 enum class WDragPhase {
     IDLE,
+    COPY_ARMED,
     PREPARING_LIFT,
     LIFTING,
     DRAGGING,
@@ -118,7 +133,8 @@ data class WDragState(
     val liftProgress: Float = 0f,
     val previewOffset: Offset = Offset.Zero,
     val preview: WDragPreviewState = WDragPreviewState(),
-    val insertionCaret: WInsertionCaretState = WInsertionCaretState()
+    val insertionCaret: WInsertionCaretState = WInsertionCaretState(),
+    val isCopy: Boolean = false
 )
 
 @Immutable
@@ -136,6 +152,8 @@ data class WClipboardState(
 @Immutable
 data class WEditorSettings(
     val fontSize: Int = 16,
+    val fontFamily: String = "Default",
     val lineSpacing: Float = 1.2f,
-    val showLineNumbers: Boolean = false
+    val showLineNumbers: Boolean = false,
+    val zoom: Float = 1.0f
 )

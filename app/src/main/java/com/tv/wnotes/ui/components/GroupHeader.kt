@@ -63,7 +63,7 @@ fun GroupHeader(
                 Icon(
                     imageVector = Icons.Default.Star,
                     contentDescription = "Starred",
-                    tint = Color(0xFFFFB300),
+                    tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(14.dp)
                 )
             }

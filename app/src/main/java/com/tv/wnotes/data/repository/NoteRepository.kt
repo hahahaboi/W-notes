@@ -22,15 +22,22 @@ class NoteRepository(
     val trashNotes: Flow<List<Note>> = noteDao.getTrashNotes()
     val lockedNotes: Flow<List<Note>> = noteDao.getLockedNotes()
 
+    val allMarkers: Flow<List<TextMarker>> = markerDao.getAllMarkers()
+    val allAnnotations: Flow<List<ContextAnnotation>> = annotationDao.getAllAnnotations()
+    val allTabs: Flow<List<NoteTab>> = noteTabDao.getAllTabs()
+
     suspend fun insert(note: Note) = noteDao.insertNote(note)
     suspend fun update(note: Note) = noteDao.updateNote(note)
     suspend fun updateTitleAndFolder(id: Long, title: String, folderId: Long?) = 
         noteDao.updateTitleAndFolder(id, title, folderId, System.currentTimeMillis())
     suspend fun updateContent(id: Long, content: String) = 
         noteDao.updateContent(id, content, System.currentTimeMillis())
+    suspend fun updateGoal(id: Long, hasGoal: Boolean, goalBlockId: String?, goalOffset: Int, goalTargetLength: Int) =
+        noteDao.updateGoal(id, hasGoal, goalBlockId, goalOffset, goalTargetLength, System.currentTimeMillis())
     suspend fun delete(note: Note) = noteDao.deleteNote(note)
     suspend fun deleteById(id: Long) = noteDao.deleteNoteById(id)
     suspend fun getByIds(ids: List<Long>) = noteDao.getNotesByIds(ids)
+    suspend fun getNoteById(id: Long) = noteDao.getNoteById(id)
     fun search(query: String) = noteDao.searchNotes(query)
 
     // Tab methods
@@ -56,4 +63,5 @@ class NoteRepository(
     suspend fun updateMarker(marker: TextMarker) = markerDao.updateMarker(marker)
     suspend fun deleteMarker(marker: TextMarker) = markerDao.deleteMarker(marker)
     suspend fun deleteMarkerById(id: String) = markerDao.deleteMarkerById(id)
+
 }

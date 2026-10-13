@@ -53,7 +53,7 @@ fun FloatingRoughNote(
     var offset by remember { 
         mutableStateOf(Offset(
             screenWidth - with(density) { (currentSize + margin).toPx() }, 
-            screenHeight - with(density) { 200.dp.toPx() }
+            screenHeight - with(density) { 280.dp.toPx() }
         )) 
     }
     
@@ -230,7 +230,7 @@ fun FloatingRoughNote(
                         )
                     },
                 shape = CircleShape,
-                color = if (isCollapsed) Color.Transparent else MaterialTheme.colorScheme.primary,
+                color = if (isCollapsed) Color.Transparent else MaterialTheme.colorScheme.secondary,
                 tonalElevation = 6.dp,
                 shadowElevation = 8.dp
             ) {
@@ -240,19 +240,19 @@ fun FloatingRoughNote(
                         Box(
                             modifier = Modifier
                                 .size(20.dp)
-                                .background(MaterialTheme.colorScheme.primary, CircleShape),
+                                .background(MaterialTheme.colorScheme.secondary, CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
                             Box(
                                 modifier = Modifier
                                     .size(6.dp)
-                                    .background(MaterialTheme.colorScheme.onPrimary, CircleShape)
+                                    .background(MaterialTheme.colorScheme.onSecondary, CircleShape)
                             )
                         }
                     } else {
                         Text(
                             "R",
-                            color = MaterialTheme.colorScheme.onPrimary,
+                            color = MaterialTheme.colorScheme.onSecondary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 24.sp
                         )

@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tv.wnotes.data.local.entity.LinkPath
+import com.tv.wnotes.util.NoteDisplayUtils
 import com.tv.wnotes.viewmodel.LinkPathViewModel
 import com.tv.wnotes.viewmodel.NoteViewModel
 
@@ -281,7 +282,7 @@ fun LinkPathsScreen(
                                             checked = selectedNotes.contains(note.id),
                                             onCheckedChange = null
                                         )
-                                        Text(note.title.ifEmpty { "Untitled" }, modifier = Modifier.padding(start = 8.dp))
+                                        Text(NoteDisplayUtils.resolveNoteDisplayData(note).displayTitle, modifier = Modifier.padding(start = 8.dp))
                                     }
                                 }
                             }
@@ -407,7 +408,7 @@ fun PathPreviewBox(
                             .padding(8.dp)
                     ) {
                         Text(
-                            text = note.title.ifEmpty { "Untitled" },
+                            text = NoteDisplayUtils.resolveNoteDisplayData(note).displayTitle,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 2
                         )

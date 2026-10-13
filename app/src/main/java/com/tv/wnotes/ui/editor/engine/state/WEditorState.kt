@@ -17,7 +17,9 @@ data class WEditorSnapshot(
     val document: WDocument,
     val annotations: ImmutableList<ContextAnnotation> = persistentListOf(),
     val markers: ImmutableList<TextMarker> = persistentListOf(),
+    val ties: ImmutableList<TabTie> = persistentListOf(),
     val isMarkerSidebarOpen: Boolean = false,
+    val isDrawingMode: Boolean = false,
     val selection: WSelectionState,
     val cursor: WCursorState,
     val drag: WDragState,
@@ -28,16 +30,22 @@ data class WEditorSnapshot(
     val telemetry: WTelemetryState = WTelemetryState(),
     val lastMutation: com.tv.wnotes.ui.editor.engine.logic.WMutationResult? = null,
     val activeAnnotationId: String? = null,
+    val activeTieIds: Set<String>? = null,
+    val isTyingTabs: Boolean = false,
     val isCreatingAnnotation: Boolean = false,
     val pendingAnnotationRange: WSelectionRange? = null,
     val pendingAnnotationAnchorText: String = "",
     val navigationHighlightRange: WSelectionRange? = null,
     val activeMarkerId: String? = null,
-    val isQuickJumpOpen: Boolean = false
+    val isQuickJumpOpen: Boolean = false,
+    val searchHighlightRanges: ImmutableList<WSelectionRange> = persistentListOf(),
+    val activeSearchHighlightRange: WSelectionRange? = null,
+    val goal: WGoal? = null
 ) {
     val annotationIndex: Map<String, List<ContextAnnotation>> by lazy {
         annotations.groupBy { it.blockId }
     }
+
 }
 
 /**
@@ -50,12 +58,14 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
         initialDocument: WDocument, 
         initialAnnotations: List<ContextAnnotation> = emptyList(),
         initialMarkers: List<TextMarker> = emptyList(),
+        initialTies: List<TabTie> = emptyList(),
         cursorAtEnd: Boolean = false
     ) : this(
         WEditorSnapshot(
             document = initialDocument,
             annotations = initialAnnotations.toImmutableList(),
             markers = initialMarkers.toImmutableList(),
+            ties = initialTies.toImmutableList(),
             selection = WSelectionState(),
             cursor = WCursorState(position = if (cursorAtEnd) {
                 val lastBlock = initialDocument.blocks.lastOrNull()
@@ -76,12 +86,12 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
         )
     )
     
-    private val _snapshot = mutableStateOf(initialSnapshot)
+    private val _snapshot = mutableStateOf(reconcileSelection(initialSnapshot))
     
     val snapshot: State<WEditorSnapshot> = _snapshot
 
     fun updateSnapshot(newSnapshot: WEditorSnapshot) {
-        _snapshot.value = newSnapshot
+        _snapshot.value = reconcileSelection(newSnapshot)
     }
 
     fun updateTelemetry(transform: (WTelemetryState) -> WTelemetryState) {
@@ -90,6 +100,18 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
 
     fun resetTelemetry() {
         _snapshot.value = _snapshot.value.copy(telemetry = WTelemetryState())
+    }
+
+    fun setGoal(point: WSelectionPoint) {
+        _snapshot.value = _snapshot.value.copy(goal = WGoal(point.blockId, point.offset))
+    }
+
+    fun moveGoal(point: WSelectionPoint) {
+        _snapshot.value = _snapshot.value.copy(goal = WGoal(point.blockId, point.offset))
+    }
+
+    fun removeGoal() {
+        _snapshot.value = _snapshot.value.copy(goal = null)
     }
 
     fun applyMutation(result: com.tv.wnotes.ui.editor.engine.logic.WMutationResult) {
@@ -101,6 +123,16 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
                 _snapshot.value = _snapshot.value.copy(lastMutation = result)
             }
         }
+    }
+
+    fun setFontSize(size: Int) {
+        val result = com.tv.wnotes.ui.editor.engine.logic.WMutationEngine.applyFontSize(_snapshot.value, size)
+        applyMutation(result)
+    }
+
+    fun adjustFontSize(delta: Int) {
+        val result = com.tv.wnotes.ui.editor.engine.logic.WMutationEngine.adjustFontSize(_snapshot.value, delta)
+        applyMutation(result)
     }
 
     fun moveCursor(point: WSelectionPoint, affinity: com.tv.wnotes.ui.editor.engine.logic.CursorAffinity) {
@@ -118,7 +150,11 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
 
     fun selectWord(point: WSelectionPoint) {
         val current = _snapshot.value
-        val newSelection = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.selectWord(point, current.document.blocks)
+        val newSelection = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.selectWord(
+            point, 
+            current.document.blocks,
+            current.document.metadata.title
+        )
         
         val mergedSelection = if (current.selection.interactionMode == WSelectionInteraction.ADD_RANGE && current.selection.isActive) {
             val combinedRanges = current.selection.ranges + newSelection.ranges
@@ -142,7 +178,11 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
 
     fun selectParagraph(point: WSelectionPoint) {
         val current = _snapshot.value
-        val newSelection = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.selectParagraph(point)
+        val newSelection = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.selectParagraph(
+            point,
+            current.document.blocks,
+            current.document.metadata.title
+        )
 
         val mergedSelection = if (current.selection.interactionMode == WSelectionInteraction.ADD_RANGE && current.selection.isActive) {
             val combinedRanges = current.selection.ranges + newSelection.ranges
@@ -178,7 +218,8 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
         val updatedRange = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.extendSelection(
             current.selection.copy(ranges = listOf(activeRange)), 
             point, 
-            current.document.blocks
+            current.document.blocks,
+            current.document.metadata.title
         ).ranges.first()
 
         val newRanges = current.selection.ranges.map { if (it.id == activeRange.id) updatedRange else it }
@@ -260,6 +301,27 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
         )
     }
 
+    fun setSelection(selection: WSelectionState) {
+        val current = _snapshot.value
+        val reconciledSelection = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.reconcile(
+            selection,
+            current.document.blocks,
+            current.document.metadata.title
+        )
+        _snapshot.value = current.copy(
+            selection = reconciledSelection,
+            cursor = current.cursor.copy(isVisible = !reconciledSelection.isActive)
+        )
+    }
+
+    private fun reconcileSelection(snapshot: WEditorSnapshot): WEditorSnapshot = snapshot.copy(
+        selection = com.tv.wnotes.ui.editor.engine.logic.WSelectionManager.reconcile(
+            snapshot.selection,
+            snapshot.document.blocks,
+            snapshot.document.metadata.title
+        )
+    )
+
     fun activateSelection(rangeId: String) {
         val current = _snapshot.value
         if (current.selection.activeRangeId == rangeId) return
@@ -299,6 +361,18 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
         _snapshot.value = current.copy(activeAnnotationId = null)
     }
 
+    fun setActiveTieIds(ids: Set<String>?) {
+        _snapshot.value = _snapshot.value.copy(activeTieIds = ids)
+    }
+
+    fun dismissTiePopup() {
+        _snapshot.value = _snapshot.value.copy(activeTieIds = null)
+    }
+
+    fun setTyingTabs(isTying: Boolean) {
+        _snapshot.value = _snapshot.value.copy(isTyingTabs = isTying)
+    }
+
     fun startCreatingAnnotation(range: WSelectionRange, anchorText: String) {
         val current = _snapshot.value
         _snapshot.value = current.copy(
@@ -324,9 +398,23 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
         _snapshot.value = current.copy(isMarkerSidebarOpen = !current.isMarkerSidebarOpen)
     }
 
+    fun setDrawingMode(active: Boolean) {
+        val current = _snapshot.value
+        _snapshot.value = current.copy(isDrawingMode = active)
+    }
+
     fun setNavigationHighlight(range: WSelectionRange?) {
         val current = _snapshot.value
         _snapshot.value = current.copy(navigationHighlightRange = range)
+    }
+
+    fun setSearchHighlights(ranges: List<WSelectionRange>, activeRange: WSelectionRange?) {
+        val current = _snapshot.value
+        _snapshot.value = current.copy(
+            searchHighlightRanges = ranges.toImmutableList(),
+            activeSearchHighlightRange = activeRange,
+            navigationHighlightRange = activeRange
+        )
     }
 
     fun setActiveMarker(id: String?) {
@@ -339,6 +427,15 @@ class WEditorState(initialSnapshot: WEditorSnapshot) {
         val current = _snapshot.value
         if (current.isQuickJumpOpen == isOpen) return
         _snapshot.value = current.copy(isQuickJumpOpen = isOpen)
+    }
+
+    fun updateZoom(zoom: Float) {
+        val current = _snapshot.value
+        val clampedZoom = zoom.coerceIn(0.5f, 2.0f)
+        if (current.settings.zoom == clampedZoom) return
+        _snapshot.value = current.copy(
+            settings = current.settings.copy(zoom = clampedZoom)
+        )
     }
 
     // Note: Other high-level methods like insertText() will be refined 

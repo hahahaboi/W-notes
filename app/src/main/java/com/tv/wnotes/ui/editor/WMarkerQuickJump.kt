@@ -1,7 +1,6 @@
 package com.tv.wnotes.ui.editor
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -33,7 +32,7 @@ import com.tv.wnotes.ui.editor.engine.state.WEditorSnapshot
 fun WMarkerQuickJump(
     snapshot: WEditorSnapshot,
     onCommand: (WEditorCommand) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     var query by remember { mutableStateOf("") }
     val allMarkers = remember(snapshot.markers, snapshot.document.blocks) {
@@ -49,7 +48,7 @@ fun WMarkerQuickJump(
     }
 
     var selectedIndex by remember(filteredMarkers) { 
-        mutableStateOf(if (filteredMarkers.isNotEmpty()) 0 else -1) 
+        mutableIntStateOf(if (filteredMarkers.isNotEmpty()) 0 else -1) 
     }
     
     val focusRequester = remember { FocusRequester() }
@@ -153,12 +152,11 @@ fun WMarkerQuickJump(
                         itemsIndexed(filteredMarkers, key = { _, m -> m.id }) { index, marker ->
                             QuickJumpItem(
                                 marker = marker,
-                                isSelected = index == selectedIndex,
-                                onClick = {
-                                    onCommand(WEditorCommand.NavigateToMarker(marker.id))
-                                    onCommand(WEditorCommand.CloseQuickJump)
-                                }
-                            )
+                                isSelected = index == selectedIndex
+                            ) {
+                                onCommand(WEditorCommand.NavigateToMarker(marker.id))
+                                onCommand(WEditorCommand.CloseQuickJump)
+                            }
                         }
                     }
                 }
